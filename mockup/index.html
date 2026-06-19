@@ -56,11 +56,25 @@
       .grid { column-count: 2; }
     }
     @media (max-width: 600px) {
-      body { padding: 2rem 1.5rem; }
-      .header { flex-direction: column; gap: 1rem; align-items: flex-start; font-size: 0.7rem; margin-bottom: 2rem; }
+      body { padding: 1.5rem 1rem; }
+      .header { flex-direction: column; gap: 0.8rem; align-items: flex-start; font-size: 0.8rem; margin-bottom: 2rem; }
       .grid { column-count: 1; }
-      .card-img-container { flex: 0 0 85%; }
-      .card-meta { padding-left: 0.8rem; }
+      
+      /* Mobile Single Column Stack */
+      .card { flex-direction: column; gap: 0.8rem; margin-bottom: 3rem; }
+      .card-img-container { flex: auto; width: 100%; }
+      .card-meta { 
+        writing-mode: horizontal-tb; 
+        flex: auto; 
+        width: 100%; 
+        border-left: none; 
+        padding-left: 0; 
+      }
+      .meta-info { 
+        font-size: 0.7rem; /* Readable on mobile */
+        width: 100%; 
+        justify-content: space-between; /* Spread across the bottom */
+      }
     }
   </style>
 </head>
