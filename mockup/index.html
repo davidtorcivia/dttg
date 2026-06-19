@@ -15,8 +15,9 @@
     
     /* MASONRY GRID */
     .grid { column-count: 3; column-gap: 2rem; display: block; }
-    .card { break-inside: avoid; display: flex; gap: 0.8rem; align-items: stretch; border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 4rem; cursor: pointer; transition: opacity 0.3s; text-decoration: none; color: inherit; }
-    .card:hover { opacity: 0.7; }
+    .card { break-inside: avoid; display: flex; gap: 0.8rem; align-items: stretch; border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 4rem; cursor: pointer; text-decoration: none; color: inherit; opacity: 0; transform: translateY(40px); transition: opacity 0.8s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    .card.visible { opacity: 1; transform: translateY(0); }
+    .card.visible:hover { opacity: 0.6; transition-duration: 0.3s; }
     
     /* IMAGE CONTAINER */
     .card-img-container { flex: 1; position: relative; }
@@ -42,13 +43,32 @@
       letter-spacing: 0.1em;
       font-weight: 500;
     }
+
+    /* CUSTOM CURSOR */
+    @media (pointer: fine) {
+      body { cursor: none; }
+      .cursor { position: fixed; top: 0; left: 0; width: 12px; height: 12px; background: var(--text); border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); z-index: 10000; transition: width 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s; mix-blend-mode: difference; }
+      .cursor.hovering { width: 60px; height: 60px; background: rgba(255,255,255,0.8); }
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 1000px) {
+      .grid { column-count: 2; }
+    }
+    @media (max-width: 600px) {
+      body { padding: 2rem 1.5rem; }
+      .header { flex-direction: column; gap: 1rem; align-items: flex-start; font-size: 0.7rem; margin-bottom: 2rem; }
+      .grid { column-count: 1; }
+      .card-img-container { flex: 0 0 85%; }
+      .card-meta { padding-left: 0.8rem; }
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <div id="sys-ticker">SYS.ARC // 0x00000000</div>
-    <div>PERSONAL ARCHIVE</div>
-    <div id="sys-clock">00:00:00</div>
+    <div>INDEX //</div>
+    <div>DO NOT TOUCH THE GLASS</div>
+    <div id="sys-clock">00:00 // NYC --°F</div>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -83,23 +103,68 @@
           </a>
         `;
       });
+
+      // Staggered Entrance Animation
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.1, rootMargin: "0px 0px -50px 0px" });
+
+      document.querySelectorAll('.card').forEach((card, index) => {
+        card.style.transitionDelay = `${(index % 3) * 0.1}s`; // Stagger columns
+        observer.observe(card);
+      });
     });
 
-    // Dynamic header elements
-    const ticker = document.getElementById('sys-ticker');
-    const clock = document.getElementById('sys-clock');
-    
-    setInterval(() => {
-      const now = new Date();
-      // Hex representation of seconds
-      const hex = Math.floor(now.getTime() / 1000).toString(16).toUpperCase();
-      ticker.textContent = `SYS.ARC // 0x${hex}`;
+    // Custom Cursor Logic
+    if (window.matchMedia("(pointer: fine)").matches) {
+      const cursor = document.createElement('div');
+      cursor.className = 'cursor';
+      document.body.appendChild(cursor);
       
-      // Clock with ticking milliseconds
-      const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
-      const ms = now.getMilliseconds().toString().padStart(3, '0').slice(0, 2);
-      clock.textContent = `${timeStr}:${ms}`;
-    }, 47);
+      document.addEventListener('mousemove', e => {
+        cursor.style.left = e.clientX + 'px';
+        cursor.style.top = e.clientY + 'px';
+      });
+      
+      document.body.addEventListener('mouseover', e => {
+        if(e.target.closest('a') || e.target.closest('.card')) {
+          cursor.classList.add('hovering');
+        } else {
+          cursor.classList.remove('hovering');
+        }
+      });
+    }
+
+    // Dynamic header elements
+    const clock = document.getElementById('sys-clock');
+    let currentTemp = '--';
+
+    async function fetchWeather() {
+      try {
+        const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=40.7128&longitude=-74.0060&current_weather=true&temperature_unit=fahrenheit');
+        const data = await res.json();
+        currentTemp = Math.round(data.current_weather.temperature);
+        updateClock();
+      } catch (e) {
+        console.error('Weather fetch failed', e);
+      }
+    }
+
+    function updateClock() {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+      clock.textContent = `${timeStr} // NYC ${currentTemp}°F`;
+    }
+
+    setInterval(updateClock, 1000);
+    updateClock();
+    fetchWeather();
+    setInterval(fetchWeather, 30 * 60 * 1000);
   </script>
 </body>
 </html>
