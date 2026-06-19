@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Archive Index</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;500&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #ffffff; --text: #111; --line: #e5e5e5; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; padding: 4rem; overflow-x: hidden; }
+    
+    .header { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 3rem; font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    
+    /* MASONRY GRID */
+    .grid { column-count: 3; column-gap: 2rem; display: block; }
+    .card { break-inside: avoid; display: flex; gap: 0.8rem; align-items: stretch; border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 4rem; cursor: pointer; transition: opacity 0.3s; text-decoration: none; color: inherit; }
+    .card:hover { opacity: 0.7; }
+    
+    /* IMAGE CONTAINER */
+    .card-img-container { flex: 1; position: relative; }
+    .card-img-container img { width: 100%; height: auto; display: block; filter: contrast(1.1); }
+    
+    /* ALL VERTICAL META CONTAINER (NO TITLES) */
+    .card-meta { 
+      flex: 0 0 1.5rem; /* Max compression width */
+      writing-mode: vertical-rl; 
+      text-orientation: mixed;
+      display: flex; 
+      justify-content: flex-start; /* Align to top */
+      border-left: 1px solid var(--line); 
+      padding-left: 0.5rem; 
+      color: var(--text);
+    }
+    
+    .meta-info { 
+      font-size: 0.55rem; 
+      display: flex; 
+      gap: 1.5rem; /* Vertical spacing between spans */
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div id="sys-ticker">SYS.ARC // 0x00000000</div>
+    <div>PERSONAL ARCHIVE</div>
+    <div id="sys-clock">00:00:00</div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <script>
+    const mockData = [
+      { id: 1, category: "Architecture", date: "OCT 14", imgUrl: "https://images.unsplash.com/photo-1513694203232-719a280e022f?q=80&w=2069&auto=format&fit=crop" },
+      { id: 2, category: "Sculpture", date: "NOV 02", imgUrl: "https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?q=80&w=2102&auto=format&fit=crop" },
+      { id: 3, category: "Photography", date: "DEC 12", imgUrl: "https://images.unsplash.com/photo-1616423640778-28d1b53229bd?q=80&w=1964&auto=format&fit=crop" },
+      { id: 4, category: "Graphic Design", date: "JAN 05", imgUrl: "https://images.unsplash.com/photo-1572949645841-094f3a9c4c94?q=80&w=1974&auto=format&fit=crop" },
+      { id: 5, category: "Interior", date: "FEB 18", imgUrl: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?q=80&w=1974&auto=format&fit=crop" },
+      { id: 6, category: "Layout", date: "MAR 22", imgUrl: "https://images.unsplash.com/photo-1550684376-efcbd6e3f031?q=80&w=1974&auto=format&fit=crop" },
+      { id: 7, category: "Texture", date: "APR 01", imgUrl: "https://images.unsplash.com/photo-1518005020951-eccb494ad742?q=80&w=1955&auto=format&fit=crop" },
+      { id: 8, category: "Art", date: "MAY 15", imgUrl: "https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=2070&auto=format&fit=crop" }
+    ];
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const grid = document.getElementById('grid');
+      mockData.forEach(item => {
+        grid.innerHTML += `
+          <a href="detail.html" class="card">
+            <div class="card-img-container">
+              <img src="${item.imgUrl}" alt="Archive Item">
+            </div>
+            <div class="card-meta">
+              <div class="meta-info">
+                <span>ID:${item.id}</span>
+                <span>${item.category}</span>
+                <span>${item.date}</span>
+              </div>
+            </div>
+          </a>
+        `;
+      });
+    });
+
+    // Dynamic header elements
+    const ticker = document.getElementById('sys-ticker');
+    const clock = document.getElementById('sys-clock');
+    
+    setInterval(() => {
+      const now = new Date();
+      // Hex representation of seconds
+      const hex = Math.floor(now.getTime() / 1000).toString(16).toUpperCase();
+      ticker.textContent = `SYS.ARC // 0x${hex}`;
+      
+      // Clock with ticking milliseconds
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+      const ms = now.getMilliseconds().toString().padStart(3, '0').slice(0, 2);
+      clock.textContent = `${timeStr}:${ms}`;
+    }, 47);
+  </script>
+</body>
+</html>

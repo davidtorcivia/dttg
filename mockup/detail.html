@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Detail - Archive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;500&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #ffffff; --text: #111; --line: #e5e5e5; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; padding: 4rem; overflow-x: hidden; }
+    
+    .header { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 3rem; font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    
+    .back-btn { display: inline-block; margin-bottom: 4rem; text-decoration: none; color: #aaa; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; transition: color 0.3s; }
+    .back-btn:hover { color: var(--text); }
+
+    .detail-container { display: flex; gap: 4rem; max-width: 1600px; align-items: flex-start; }
+    .image-wrapper { flex: 0 0 70%; }
+    .image-wrapper img { width: 100%; height: auto; display: block; filter: contrast(1.1); }
+    
+    .info-wrapper { flex: 1; border-left: 1px solid var(--line); padding-left: 2rem; position: sticky; top: 4rem; }
+    
+    .info-grid { display: grid; grid-template-columns: 100px 1fr; gap: 1rem 0; font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; color: #666; margin-bottom: 3rem; border-bottom: 1px solid var(--line); padding-bottom: 2rem; }
+    .info-label { color: #aaa; }
+    .info-value { color: var(--text); font-weight: 500; }
+    
+    .note-content { font-size: 1.1rem; line-height: 1.8; color: var(--text); font-weight: 300; }
+    
+    @media (max-width: 1000px) {
+      .detail-container { flex-direction: column; gap: 2rem; }
+      .image-wrapper { flex: auto; width: 100%; }
+      .info-wrapper { flex: auto; border-left: none; border-top: 1px solid var(--line); padding-left: 0; padding-top: 2rem; position: relative; top: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div id="sys-ticker">SYS.ARC // 0x00000000</div>
+    <div>ITEM DETAIL</div>
+    <div id="sys-clock">00:00:00</div>
+  </div>
+
+  <a href="index.html" class="back-btn">&larr; BACK TO INDEX</a>
+
+  <div class="detail-container">
+    <div class="image-wrapper">
+      <img src="https://images.unsplash.com/photo-1513694203232-719a280e022f?q=80&w=2069&auto=format&fit=crop" alt="Item Image">
+    </div>
+    
+    <div class="info-wrapper">
+      <div class="info-grid">
+        <div class="info-label">ID</div><div class="info-value">001</div>
+        <div class="info-label">CATEGORY</div><div class="info-value">Architecture</div>
+        <div class="info-label">DATE</div><div class="info-value">OCT 14, 2026</div>
+        <div class="info-label">STATUS</div><div class="info-value">Public</div>
+      </div>
+      
+      <div class="note-content">
+        A breathtaking interplay of light and shadow, highlighting pure structural forms. The negative space speaks volumes. This captures the exact essence of the spatial density required for the upcoming layout.
+      </div>
+    </div>
+  </div>
+  <script>
+    const ticker = document.getElementById('sys-ticker');
+    const clock = document.getElementById('sys-clock');
+    setInterval(() => {
+      const now = new Date();
+      const hex = Math.floor(now.getTime() / 1000).toString(16).toUpperCase();
+      ticker.textContent = `SYS.ARC // 0x${hex}`;
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+      const ms = now.getMilliseconds().toString().padStart(3, '0').slice(0, 2);
+      clock.textContent = `${timeStr}:${ms}`;
+    }, 47);
+  </script>
+</body>
+</html>
