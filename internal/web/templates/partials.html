@@ -1,0 +1,70 @@
+{{define "headtags"}}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#111111">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <link rel="preload" href="/static/fonts/inter-latin-300-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/inter-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/css/app.css">
+{{end}}
+
+{{define "sysheader"}}
+<div class="header">
+  <div class="header-left">
+    <a href="/">{{.Cfg.SiteTagline}} //</a>
+    <a href="/search" class="search-toggle" id="search-toggle" aria-label="Search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+    </a>
+  </div>
+  <div>{{.Cfg.SiteTitle}}</div>
+  <div id="sys-clock">00:00 // NYC --°F</div>
+</div>
+<div class="search-overlay" id="search-overlay" hidden>
+  <form class="search-form" action="/search" method="GET" role="search">
+    <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+    <input type="search" name="q" id="search-input" placeholder="Search the archive" autocomplete="off" value="{{.SearchQuery}}">
+    <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
+  </form>
+</div>
+{{if .IsAdmin}}
+<div class="adminbar">
+  <a href="/admin">Admin</a>
+  <a href="/admin/new">+ New</a>
+  <a href="/admin/settings">Settings</a>
+  <a href="/">View site</a>
+  <form method="POST" action="/logout"><button type="submit">Logout</button></form>
+</div>
+{{end}}
+{{end}}
+
+{{define "tail"}}
+<script src="/static/js/app.js"></script>
+{{end}}
+
+{{define "card"}}
+<a href="{{.DetailURL}}" class="card">
+  <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
+    {{- if .ThumbURL}}
+    <img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
+    {{- else if eq .Kind "document"}}
+    <div class="doc-tile">
+      <span class="doc-ext">{{fileext .FileName}}</span>
+      <span class="doc-name">{{if .Title}}{{.Title}}{{else}}{{.FileName}}{{end}}</span>
+      <span class="doc-size">{{filesize .FileSize}}</span>
+    </div>
+    {{- else if eq .Kind "text"}}
+    <div class="card-text">{{.Note}}</div>
+    {{- else}}
+    <div class="card-text">{{if .Title}}{{.Title}}{{else}}{{.SourceURL}}{{end}}</div>
+    {{- end}}
+  </div>
+  <div class="card-meta">
+    <div class="meta-info">
+      <span>ID:{{.ID}}</span>
+      {{- if .CategoryName}}<span>{{.CategoryName}}</span>{{end}}
+      <span>{{shortDate .CreatedAt}}</span>
+    </div>
+  </div>
+</a>
+{{end}}

@@ -1,0 +1,20 @@
+# data + media (runtime, mounted as volumes in Docker)
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# build artifacts
+/dnttg
+/dnttg.exe
+/dist/
+
+# secrets / local env / deploy notes (handed to the server-side agent out of band)
+.env
+*.local.toml
+*.local.md
+DEPLOY.local.md
+
+# os / editor
+.DS_Store
+Thumbs.db

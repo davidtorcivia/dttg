@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+  {{.TrackingScript}}
+</head>
+<body>
+  {{template "sysheader" .}}
+
+  {{if .Categories}}
+  <nav class="cats">
+    <a href="/" class="{{if and (not .ActiveCat) (not .ActiveTag)}}active{{end}}">ALL</a>
+    {{- range .Categories}}
+    <a href="/category/{{.Slug}}" class="{{if eq $.ActiveCat .Slug}}active{{end}}">{{.Name}}<span>{{.Count}}</span></a>
+    {{- end}}
+  </nav>
+  {{end}}
+
+  <div class="grid" id="grid">
+    {{- range .Items}}
+    {{template "card" .}}
+    {{- else}}
+    <p class="empty">Nothing here yet.</p>
+    {{- end}}
+  </div>
+
+  {{template "tail" .}}
+</body>
+</html>

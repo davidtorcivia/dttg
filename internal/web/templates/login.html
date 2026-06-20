@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Login — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="login-wrap">
+    <h1>Restricted</h1>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
+      <button type="submit">Enter</button>
+      {{if .Error}}<div class="login-error">{{.Error}}</div>{{end}}
+    </form>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

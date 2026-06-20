@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Admin — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="admin">
+    <div class="admin-head">
+      <h1>Archive — {{len .Items}} items</h1>
+      <a class="btn" href="/admin/new">+ New</a>
+    </div>
+    <table class="admin-table">
+      <thead>
+        <tr><th></th><th>ID</th><th>Title</th><th>Kind</th><th>Category</th><th>Status</th><th>Date</th><th></th></tr>
+      </thead>
+      <tbody>
+        {{- range .Items}}
+        <tr>
+          <td class="admin-thumb">{{if .ThumbURL}}<img src="{{.ThumbURL}}" alt="" loading="lazy">{{end}}</td>
+          <td>{{pad3 .ID}}</td>
+          <td><a href="{{.DetailURL}}">{{if .Title}}{{.Title}}{{else}}<em>untitled</em>{{end}}</a></td>
+          <td>{{.Kind}}</td>
+          <td>{{.CategoryName}}</td>
+          <td>{{.Visibility}}</td>
+          <td>{{shortDate .CreatedAt}}</td>
+          <td class="admin-actions">
+            <a href="/admin/items/{{.ID}}/edit">edit</a>
+            <form method="POST" action="/admin/items/{{.ID}}/delete" onsubmit="return confirm('Delete item {{.ID}}?')"><button type="submit">delete</button></form>
+          </td>
+        </tr>
+        {{- else}}
+        <tr><td colspan="8" class="empty">Nothing archived yet.</td></tr>
+        {{- end}}
+      </tbody>
+    </table>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

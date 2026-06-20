@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{if .Item.Title}}{{.Item.Title}} — {{end}}{{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+  {{.TrackingScript}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <a href="/" class="back-btn">&larr; Back to index</a>
+
+  <div class="detail-container">
+    <div class="image-wrapper">
+      {{- with .Item}}
+      {{- if and (eq .Kind "embed") .EmbedHTML}}
+      <div class="embed-wrap">{{safeHTML .EmbedHTML}}</div>
+      {{- else if .CoverURL}}
+      <img src="{{.CoverURL}}" alt="{{.Title}}">
+      {{- else if eq .Kind "document"}}
+        {{- if eq .FileMime "application/pdf"}}
+      <iframe class="pdf-frame" src="{{.FileURL}}#view=FitH" title="{{.FileName}}"></iframe>
+        {{- end}}
+      <div class="doc-panel">
+        <span class="doc-ext-lg">{{fileext .FileName}}</span>
+        <div class="doc-panel-meta">
+          <div class="doc-panel-name">{{if .Title}}{{.Title}}{{else}}{{.FileName}}{{end}}</div>
+          <div class="doc-panel-size">{{.FileName}} · {{filesize .FileSize}}</div>
+        </div>
+        <a class="btn" href="{{.FileURL}}" download>Download</a>
+      </div>
+      {{- else if eq .Kind "text"}}
+      <div class="detail-text">{{.Note}}</div>
+      {{- end}}
+      {{- end}}
+    </div>
+
+    <div class="info-wrapper">
+      <div class="info-grid">
+        <div class="info-label">ID</div><div class="info-value">{{pad3 .Item.ID}}</div>
+        {{- if .Item.CategoryName}}
+        <div class="info-label">Category</div>
+        <div class="info-value"><a href="/category/{{.Item.CategorySlug}}">{{.Item.CategoryName}}</a></div>
+        {{- end}}
+        <div class="info-label">Date</div><div class="info-value">{{longDate .Item.CreatedAt}}</div>
+        <div class="info-label">Status</div><div class="info-value">{{.Item.Visibility}}</div>
+        {{- if .Item.FileName}}
+        <div class="info-label">File</div>
+        <div class="info-value"><a href="{{.Item.FileURL}}" download>{{fileext .Item.FileName}} · {{filesize .Item.FileSize}}</a></div>
+        {{- end}}
+        {{- if .Item.SourceURL}}
+        <div class="info-label">Source</div>
+        <div class="info-value"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{if .Item.LinkSiteName}}{{.Item.LinkSiteName}}{{else}}Open &#8599;{{end}}</a></div>
+        {{- end}}
+        {{- if .Item.Tags}}
+        <div class="info-label">Tags</div>
+        <div class="info-value tags">
+          {{- range .Item.Tags}}<a href="/tag/{{.Slug}}">{{.Name}}</a>{{end}}
+        </div>
+        {{- end}}
+      </div>
+
+      {{- if and .Item.Note (ne .Item.Kind "text")}}
+      <div class="note-content">{{.Item.Note}}</div>
+      {{- end}}
+      {{- if .Item.LinkDescription}}
+      <div class="note-content">{{.Item.LinkDescription}}</div>
+      {{- end}}
+
+      {{- if .IsAdmin}}
+      <div class="detail-admin">
+        <a href="/admin/items/{{.Item.ID}}/edit">Edit</a>
+        <form method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')"><button type="submit">Delete</button></form>
+      </div>
+      {{- end}}
+    </div>
+  </div>
+
+  {{template "tail" .}}
+</body>
+</html>

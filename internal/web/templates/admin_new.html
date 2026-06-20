@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>New — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="admin admin-form">
+    <h1>New item</h1>
+    <form method="POST" action="/admin/items" enctype="multipart/form-data">
+      <label>URL <span>(image, link, document, or YouTube/Vimeo — kind is auto-detected)</span>
+        <input type="url" name="url" placeholder="https://…" value="{{with .Prefill}}{{.URL}}{{end}}">
+      </label>
+      <label>…or upload a file <span>(image, PDF, or document)</span>
+        <span class="file-field">
+          <span class="file-btn">Choose file</span>
+          <span class="file-name" data-file-name>No file chosen</span>
+          <input type="file" name="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.rtf,.epub">
+        </span>
+      </label>
+      <label>Title
+        <input type="text" name="title" value="{{with .Prefill}}{{.Title}}{{end}}">
+      </label>
+      <label>Note
+        <textarea name="note" rows="3">{{with .Prefill}}{{.Note}}{{end}}</textarea>
+      </label>
+      <label>Category
+        <input type="text" name="category" list="cats" placeholder="e.g. Architecture" value="{{with .Prefill}}{{.Category}}{{end}}">
+      </label>
+      <datalist id="cats">{{range .Categories}}<option value="{{.Name}}">{{end}}</datalist>
+      <label>Tags <span>(comma-separated)</span>
+        <input type="text" name="tags" value="{{with .Prefill}}{{.Tags}}{{end}}">
+      </label>
+      <label>Visibility
+        <select name="visibility">
+          <option value="public"{{if and .Prefill (eq .Prefill.Visibility "private")}}{{else}} selected{{end}}>Public</option>
+          <option value="private"{{if and .Prefill (eq .Prefill.Visibility "private")}} selected{{end}}>Private</option>
+        </select>
+      </label>
+      {{if .Error}}<div class="login-error">{{.Error}}</div>{{end}}
+      <div class="form-actions"><button type="submit">Archive it</button> <a href="/admin">Cancel</a></div>
+    </form>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

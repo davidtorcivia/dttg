@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Edit {{pad3 .Item.ID}} — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="admin admin-form">
+    <h1>Edit item {{pad3 .Item.ID}}</h1>
+    <div class="edit-layout">
+      <div class="edit-preview">
+        {{- if .Item.ThumbURL}}<img src="{{.Item.ThumbURL}}" alt="">
+        {{- else if eq .Item.Kind "text"}}<div class="detail-text">{{.Item.Note}}</div>{{end}}
+        <p class="muted">{{.Item.Kind}} · {{longDate .Item.CreatedAt}}</p>
+        {{- if .Item.SourceURL}}<p class="muted"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{.Item.SourceURL}}</a></p>{{end}}
+      </div>
+      <form method="POST" action="/admin/items/{{.Item.ID}}">
+        <label>Title
+          <input type="text" name="title" value="{{.Item.Title}}">
+        </label>
+        <label>Note
+          <textarea name="note" rows="4">{{.Item.Note}}</textarea>
+        </label>
+        <label>Category
+          <input type="text" name="category" list="cats" value="{{.Item.CategoryName}}">
+        </label>
+        <datalist id="cats">{{range .Categories}}<option value="{{.Name}}">{{end}}</datalist>
+        <label>Tags <span>(comma-separated)</span>
+          <input type="text" name="tags" value="{{.TagsCSV}}">
+        </label>
+        <label>Visibility
+          <select name="visibility">
+            <option value="public"{{if eq .Item.Visibility "public"}} selected{{end}}>Public</option>
+            <option value="private"{{if eq .Item.Visibility "private"}} selected{{end}}>Private</option>
+          </select>
+        </label>
+        <div class="form-actions"><button type="submit">Save</button> <a href="/admin">Cancel</a></div>
+      </form>
+    </div>
+    <form class="danger" method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')">
+      <button type="submit">Delete item</button>
+    </form>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

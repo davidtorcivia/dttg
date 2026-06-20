@@ -1,0 +1,12 @@
+.git/
+data/
+*.db
+*.db-wal
+*.db-shm
+dist/
+dnttg
+dnttg.exe
+.env
+*.local.md
+DEPLOY.local.md
+mockup/

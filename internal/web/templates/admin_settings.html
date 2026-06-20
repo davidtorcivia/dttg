@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Settings — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="admin admin-form">
+    <h1>Settings</h1>
+
+    <form method="POST" action="/admin/settings">
+      <label>Analytics / tracking snippet
+        <span>Pasted raw into the &lt;head&gt; of public pages only (Umami, Plausible, etc.). Leave blank to disable.</span>
+        <textarea name="tracking_script" rows="6" class="mono" placeholder="Paste your analytics script tag here">{{.Settings.Tracking}}</textarea>
+      </label>
+      <div class="form-actions"><button type="submit">Save settings</button> <a href="/admin">Back</a></div>
+    </form>
+
+    <div class="settings-section">
+      <h2>Backups</h2>
+      {{if .Settings.Backup.Enabled}}
+      <p class="muted">Rolling SQLite snapshots to the private R2 backups bucket, pruned after {{.Settings.Backup.RetentionDays}} days.</p>
+      <p class="muted">
+        {{if .Settings.Backup.Last.IsZero}}No backup taken yet this session.{{else}}Last backup: {{longDate .Settings.Backup.Last}} · {{.Settings.Backup.Count}} this session.{{end}}
+      </p>
+      {{if .Settings.Backup.Err}}<p class="login-error">Last error: {{.Settings.Backup.Err}}</p>{{end}}
+      <form method="POST" action="/admin/backup"><button type="submit" class="btn">Back up now</button></form>
+      {{else}}
+      <p class="muted">Backups are not configured. Set <code>R2_*</code> credentials and <code>R2_BACKUP_BUCKET</code> to enable rolling DB snapshots.</p>
+      {{end}}
+    </div>
+
+    <div class="settings-section">
+      <h2>Capture</h2>
+      <p class="muted">Drag this to your bookmarks bar to save the current page (you must be logged in here):</p>
+      <p><a class="bookmarklet" id="bookmarklet" href="#" data-base="{{.Cfg.BaseURL}}">+ Save to the glass</a></p>
+      <p class="muted">Firefox extension: load <code>extension/</code> via <code>about:debugging</code> → “Load Temporary Add-on”, then set this server's URL and an API token (<code>dnttg token firefox</code>) in its options. The same extension runs on Firefox for Android.</p>
+    </div>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>Save to the glass</title>
+</head>
+<body>
+  <header class="bar">DO NOT TOUCH THE GLASS</header>
+
+  <div id="needs-config" class="notice" hidden>
+    No server configured. <a href="#" id="open-options-2">Open options →</a>
+  </div>
+
+  <form id="form">
+    <label>URL<input type="url" id="url" placeholder="https://…"></label>
+    <label>Title<input type="text" id="title"></label>
+    <label>Note<textarea id="note" rows="2"></textarea></label>
+    <div class="row">
+      <label class="grow">Category<input type="text" id="category" placeholder="e.g. Texture"></label>
+      <label>Visibility
+        <select id="visibility">
+          <option value="public">Public</option>
+          <option value="private">Private</option>
+        </select>
+      </label>
+    </div>
+    <label>Tags<input type="text" id="tags" placeholder="comma, separated"></label>
+    <div class="actions">
+      <button type="submit">Save</button>
+      <a href="#" id="open-options">Options</a>
+    </div>
+    <div id="status"></div>
+  </form>
+
+  <script src="popup.js"></script>
+</body>
+</html>

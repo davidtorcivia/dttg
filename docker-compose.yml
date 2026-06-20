@@ -1,0 +1,27 @@
+# Generic, commit-safe compose. Real values live in .env (see .env.example),
+# which is git-ignored. Cloudflare tunnel is configured separately on the host
+# (see DEPLOY.local.md) — not started from here.
+services:
+  dnttg:
+    build: .
+    image: dnttg:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - dnttg-data:/data
+
+  # Optional: run the Cloudflare tunnel as a sidecar instead of on the host.
+  # Uncomment and set TUNNEL_TOKEN in .env (from the Cloudflare dashboard).
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  #   depends_on:
+  #     - dnttg
+
+volumes:
+  dnttg-data:

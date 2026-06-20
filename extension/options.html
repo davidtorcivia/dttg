@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>DNTTG — Options</title>
+  <style>
+    body { width: 480px; }
+    p.hint { font-size: 0.78rem; color: #888; margin: 0.6rem 0 1.2rem; line-height: 1.5; }
+    code { background: #f0f0f0; padding: 0.05rem 0.3rem; }
+  </style>
+</head>
+<body>
+  <header class="bar">DO NOT TOUCH THE GLASS — Options</header>
+  <form id="form">
+    <label>Server URL<input type="url" id="baseUrl" placeholder="https://your-archive.example.com" required></label>
+    <label>API token<input type="password" id="token" placeholder="paste your API token" required></label>
+    <p class="hint">Mint a token on the server with <code>dnttg token firefox</code>. It is stored only in this browser.</p>
+    <div class="actions"><button type="submit">Save</button><span id="status"></span></div>
+  </form>
+  <script src="options.js"></script>
+</body>
+</html>
