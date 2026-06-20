@@ -1,9 +1,44 @@
+:root {
+  --bg: #fff;
+  --text: #111;
+  --muted: #666;
+  --faint: #aaa;
+  --line: #e5e5e5;
+  --line-strong: #111;
+  --accent: #111;
+  --accent-text: #fff;
+  --notice-bg: #faf3e0;
+  --notice-line: #e8dcc0;
+  --ok: #2e7d32;
+  --err: #c0392b;
+  --combo-bg: #fff;
+  --combo-active: #f2f2f2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0d0d;
+    --text: #ededed;
+    --muted: #9a9a9a;
+    --faint: #5f5f5f;
+    --line: #262626;
+    --line-strong: #ededed;
+    --accent: #ededed;
+    --accent-text: #0d0d0d;
+    --notice-bg: #211d14;
+    --notice-line: #3a3322;
+    --ok: #6abf6e;
+    --err: #e3756a;
+    --combo-bg: #161616;
+    --combo-active: #232323;
+  }
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   width: 320px;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #111;
-  background: #fff;
+  color: var(--text);
+  background: var(--bg);
   padding: 1rem;
   font-size: 13px;
 }
@@ -11,25 +46,34 @@ body {
   font-size: 0.6rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #aaa;
-  border-bottom: 1px solid #e5e5e5;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
   padding-bottom: 0.6rem;
   margin-bottom: 0.9rem;
 }
 .notice {
-  background: #faf3e0;
-  border: 1px solid #e8dcc0;
-  padding: 0.6rem;
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-line);
+  padding: 0.7rem;
   font-size: 0.75rem;
+  line-height: 1.5;
   margin-bottom: 0.8rem;
 }
-.notice a { color: #111; }
+.notice a, .notice button.link {
+  color: var(--text);
+  background: none;
+  border: none;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
 label {
   display: block;
   font-size: 0.58rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #888;
+  color: var(--muted);
   margin-bottom: 0.7rem;
 }
 input, textarea, select {
@@ -38,26 +82,55 @@ input, textarea, select {
   margin-top: 0.25rem;
   padding: 0.4rem 0;
   border: none;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--line);
   font-family: inherit;
   font-size: 0.85rem;
   background: transparent;
   outline: none;
-  color: #111;
+  color: var(--text);
 }
-input:focus, textarea:focus, select:focus { border-color: #111; }
+input::placeholder, textarea::placeholder { color: var(--faint); opacity: 1; }
+input:focus, textarea:focus, select:focus { border-color: var(--line-strong); }
+select { cursor: pointer; }
 textarea { resize: vertical; }
 .row { display: flex; gap: 1rem; }
 .row .grow { flex: 1; }
+
+/* combobox autocomplete */
+.combo { position: relative; }
+.combo-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin-top: 2px;
+  list-style: none;
+  background: var(--combo-bg);
+  border: 1px solid var(--line);
+  max-height: 180px;
+  overflow-y: auto;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.combo-item {
+  padding: 0.4rem 0.55rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-item.active, .combo-item:hover { background: var(--combo-active); }
+
 .actions {
   display: flex;
   align-items: center;
   gap: 1rem;
   margin-top: 0.4rem;
 }
-.actions button {
-  background: #111;
-  color: #fff;
+.actions button[type="submit"], button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
   border: none;
   padding: 0.5rem 1.1rem;
   font: inherit;
@@ -66,14 +139,18 @@ textarea { resize: vertical; }
   text-transform: uppercase;
   cursor: pointer;
 }
-.actions a {
+.actions button[type="submit"][disabled] { opacity: 0.5; cursor: default; }
+.actions a, .actions .spacer + a {
   font-size: 0.62rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #aaa;
+  color: var(--faint);
   text-decoration: none;
+  cursor: pointer;
 }
-.actions a:hover { color: #111; }
+.actions a:hover { color: var(--text); }
+.spacer { flex: 1; }
 #status { margin-top: 0.7rem; font-size: 0.72rem; min-height: 1em; }
-#status.ok { color: #2e7d32; }
-#status.err { color: #c0392b; }
+#status.ok { color: var(--ok); }
+#status.err { color: var(--err); }
+.hint { font-size: 0.72rem; color: var(--muted); }

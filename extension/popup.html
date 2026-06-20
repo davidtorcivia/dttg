@@ -12,7 +12,7 @@
     No server configured. <a href="#" id="open-options-2">Open options →</a>
   </div>
 
-  <form id="form">
+  <form id="form" hidden>
     <label>URL<input type="url" id="url" placeholder="https://…"></label>
     <label>Title<input type="text" id="title"></label>
     <label>Note<textarea id="note" rows="2"></textarea></label>
@@ -28,11 +28,15 @@
     <label>Tags<input type="text" id="tags" placeholder="comma, separated"></label>
     <div class="actions">
       <button type="submit">Save</button>
+      <span class="hint" id="hint" title="Save now">⌘/Ctrl ↵</span>
+      <span class="spacer"></span>
       <a href="#" id="open-options">Options</a>
     </div>
     <div id="status"></div>
   </form>
 
+  <script src="common.js"></script>
+  <script src="combo.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

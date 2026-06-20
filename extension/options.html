@@ -6,8 +6,20 @@
   <title>DNTTG — Options</title>
   <style>
     body { width: 480px; }
-    p.hint { font-size: 0.78rem; color: #888; margin: 0.6rem 0 1.2rem; line-height: 1.5; }
-    code { background: #f0f0f0; padding: 0.05rem 0.3rem; }
+    p.hint { font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0 1.2rem; line-height: 1.5; }
+    code { background: var(--combo-active); padding: 0.05rem 0.3rem; border-radius: 2px; }
+    .actions button.secondary {
+      background: none;
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 0.5rem 1.1rem;
+      font: inherit;
+      font-size: 0.62rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .actions button.secondary:hover { border-color: var(--line-strong); }
   </style>
 </head>
 <body>
@@ -15,9 +27,19 @@
   <form id="form">
     <label>Server URL<input type="url" id="baseUrl" placeholder="https://your-archive.example.com" required></label>
     <label>API token<input type="password" id="token" placeholder="paste your API token" required></label>
-    <p class="hint">Mint a token on the server with <code>dnttg token firefox</code>. It is stored only in this browser.</p>
-    <div class="actions"><button type="submit">Save</button><span id="status"></span></div>
+    <p class="hint">
+      Mint a token on the server with <code>dnttg token firefox</code>. The URL and token are
+      stored only in this browser and sent only to your server. Use <strong>Test connection</strong>
+      to confirm they work.
+    </p>
+    <div class="actions">
+      <button type="submit">Save</button>
+      <button type="button" class="secondary" id="test">Test connection</button>
+      <span class="spacer"></span>
+      <span id="status"></span>
+    </div>
   </form>
+  <script src="common.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

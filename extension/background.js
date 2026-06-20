@@ -1,4 +1,7 @@
 // Context-menu capture: image / link / selection / page -> POST /api/items.
+// Shared config/fetch/saveItem helpers live in common.js (loaded first).
+
+"use strict";
 
 const MENUS = [
   { id: "save-image", title: "Save image to the glass", contexts: ["image"] },
@@ -7,11 +10,14 @@ const MENUS = [
   { id: "save-page", title: "Save this page to the glass", contexts: ["page"] },
 ];
 
-browser.runtime.onInstalled.addListener(() => {
+function buildMenus() {
   browser.contextMenus.removeAll().then(() => {
     for (const m of MENUS) browser.contextMenus.create(m);
   });
-});
+}
+
+browser.runtime.onInstalled.addListener(buildMenus);
+browser.runtime.onStartup.addListener(buildMenus);
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   const title = tab && tab.title;
@@ -32,7 +38,17 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
       payload = { url: cleanSource(info.pageUrl || (tab && tab.url)), title };
       break;
   }
-  if (payload) await saveItem(payload);
+  if (!payload) return;
+
+  try {
+    await saveItem(payload);
+    notify("Saved to the glass", payload.title || payload.url || "");
+  } catch (err) {
+    notify("Save failed", (err && err.message) || String(err));
+    if (err && err.code === "unconfigured") {
+      browser.runtime.openOptionsPage();
+    }
+  }
 });
 
 // For x.com / twitter.com expanded-image (and other deep) URLs, link back to the
@@ -43,31 +59,9 @@ function cleanSource(url) {
   return m ? m[1] : url;
 }
 
-async function saveItem(payload) {
-  const cfg = await browser.storage.local.get(["baseUrl", "token"]);
-  if (!cfg.baseUrl || !cfg.token) {
-    notify("Not configured", "Set the server URL and API token in the extension options.");
-    browser.runtime.openOptionsPage();
-    return;
-  }
-  try {
-    const res = await fetch(cfg.baseUrl.replace(/\/+$/, "") + "/api/items", {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + cfg.token, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
-    notify("Saved to the glass", payload.title || payload.url || "");
-  } catch (err) {
-    notify("Save failed", String((err && err.message) || err));
-  }
-}
-
 function notify(title, message) {
-  try {
-    browser.notifications.create({ type: "basic", title, message: message || "" });
-  } catch (e) {
-    /* notifications may be unavailable; ignore */
-  }
+  if (!browser.notifications) return; // unavailable on some platforms (e.g. Android)
+  browser.notifications
+    .create({ type: "basic", title, message: message || "" })
+    .catch(() => {});
 }
