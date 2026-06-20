@@ -171,7 +171,7 @@ input, textarea, select { color:var(--text); }
 .search-result:hover { opacity:.55; }
 .search-result img, .search-result .sr-tile { width:46px; height:46px; flex:0 0 46px; object-fit:cover; background:var(--line); filter:contrast(1.1); }
 .search-result .sr-tile { display:flex; align-items:center; justify-content:center; background:var(--text); color:var(--bg); font-size:.5rem; letter-spacing:.1em; }
-.sr-main { flex:1; min-width:0; }
+.sr-main { flex:1; min-width:0; display:flex; flex-direction:column; }
 .sr-title { font-size:.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .sr-meta { font-size:.6rem; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); margin-top:.15rem; }
 .search-empty { color:var(--faint); font-size:.75rem; padding:.6rem 0; text-transform:uppercase; letter-spacing:.1em; }
