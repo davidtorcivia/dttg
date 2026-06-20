@@ -23,25 +23,76 @@
     });
   }
 
-  // ---- search overlay ----
+  // ---- search overlay + live results ----
   (function () {
     var toggle = document.getElementById('search-toggle');
     var overlay = document.getElementById('search-overlay');
     var input = document.getElementById('search-input');
     var close = document.getElementById('search-close');
+    var results = document.getElementById('search-results');
     if (!overlay) return;
+
+    var isOpen = function () { return overlay.classList.contains('open'); };
     var open = function (e) {
       if (e) e.preventDefault();
-      overlay.hidden = false;
+      overlay.classList.add('open');
       if (input) { input.focus(); input.select(); }
     };
-    var hide = function () { overlay.hidden = true; };
+    var hide = function () { overlay.classList.remove('open'); };
+
     if (toggle) toggle.addEventListener('click', open);
     if (close) close.addEventListener('click', hide);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) hide(); });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') hide();
+      if (e.key === 'Escape' && isOpen()) hide();
       if (e.key === '/' && document.activeElement === document.body) open(e);
+    });
+
+    var esc = function (s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    };
+    var render = function (items) {
+      if (!results) return;
+      if (!items.length) { results.innerHTML = '<div class="search-empty">No matches</div>'; return; }
+      results.innerHTML = items.map(function (it) {
+        var media = it.thumb
+          ? '<img src="' + esc(it.thumb) + '" alt="">'
+          : '<span class="sr-tile">' + esc((it.kind || '').slice(0, 3).toUpperCase()) + '</span>';
+        var meta = [it.category, it.date].filter(Boolean).map(esc).join(' · ');
+        return '<a class="search-result" href="' + esc(it.url) + '">' + media +
+          '<span class="sr-main"><span class="sr-title">' + esc(it.title || '(untitled)') +
+          '</span><span class="sr-meta">' + meta + '</span></span></a>';
+      }).join('');
+    };
+    var timer;
+    if (input && results) {
+      input.addEventListener('input', function () {
+        clearTimeout(timer);
+        var q = input.value.trim();
+        if (!q) { results.innerHTML = ''; return; }
+        timer = setTimeout(function () {
+          fetch('/api/search?q=' + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (d) { render(d.results || []); })
+            .catch(function () {});
+        }, 200);
+      });
+    }
+  })();
+
+  // ---- detail prev/next keyboard nav (arrow keys) ----
+  (function () {
+    var prev = document.getElementById('nav-prev');
+    var next = document.getElementById('nav-next');
+    if (!prev && !next) return;
+    document.addEventListener('keydown', function (e) {
+      var t = e.target;
+      if (t && t.matches && t.matches('input, textarea, select')) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'ArrowLeft' && prev) window.location.href = prev.href;
+      if (e.key === 'ArrowRight' && next) window.location.href = next.href;
     });
   })();
 

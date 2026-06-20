@@ -648,6 +648,34 @@ func (s *Store) ListMediaForItem(ctx context.Context, itemID int64) ([]Media, er
 	return out, rows.Err()
 }
 
+// GetAdjacent returns the ids of the newer (prev) and older (next) items
+// relative to it within the board ordering (created_at DESC, id DESC). Returns 0
+// for either end. Respects visibility unless includePrivate.
+func (s *Store) GetAdjacent(ctx context.Context, it Item, includePrivate bool) (prevID, nextID int64, err error) {
+	vis := ""
+	if !includePrivate {
+		vis = " AND visibility='public'"
+	}
+	created := it.CreatedAt.Unix()
+
+	// prev = newer (appears before in DESC order)
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id FROM items WHERE (created_at > ? OR (created_at = ? AND id > ?))`+vis+
+			` ORDER BY created_at ASC, id ASC LIMIT 1`, created, created, it.ID).Scan(&prevID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, err
+	}
+
+	// next = older (appears after in DESC order)
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id FROM items WHERE (created_at < ? OR (created_at = ? AND id < ?))`+vis+
+			` ORDER BY created_at DESC, id DESC LIMIT 1`, created, created, it.ID).Scan(&nextID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return prevID, 0, err
+	}
+	return prevID, nextID, nil
+}
+
 // Slugify lowercases and hyphenates a string for use in URLs.
 func Slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

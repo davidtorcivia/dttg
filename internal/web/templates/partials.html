@@ -20,12 +20,15 @@
   <div>{{.Cfg.SiteTitle}}</div>
   <div id="sys-clock">00:00 // NYC --°F</div>
 </div>
-<div class="search-overlay" id="search-overlay" hidden>
-  <form class="search-form" action="/search" method="GET" role="search">
-    <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-    <input type="search" name="q" id="search-input" placeholder="Search the archive" autocomplete="off" value="{{.SearchQuery}}">
-    <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
-  </form>
+<div class="search-overlay" id="search-overlay">
+  <div class="search-panel">
+    <form class="search-form" action="/search" method="GET" role="search">
+      <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input type="search" name="q" id="search-input" placeholder="Search the archive" autocomplete="off" value="{{.SearchQuery}}">
+      <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
+    </form>
+    <div class="search-results" id="search-results"></div>
+  </div>
 </div>
 {{if .IsAdmin}}
 <div class="adminbar">
@@ -67,4 +70,21 @@
     </div>
   </div>
 </a>
+{{end}}
+
+{{define "seo"}}
+  {{- with .Meta}}
+  <meta name="description" content="{{.Description}}">
+  <link rel="canonical" href="{{.URL}}">
+  <meta property="og:type" content="{{.Type}}">
+  <meta property="og:site_name" content="{{$.Cfg.SiteTitle}}">
+  <meta property="og:title" content="{{$.PageTitle}}">
+  <meta property="og:description" content="{{.Description}}">
+  <meta property="og:url" content="{{.URL}}">
+  {{if .Image}}<meta property="og:image" content="{{.Image}}">{{end}}
+  <meta name="twitter:card" content="{{if .Image}}summary_large_image{{else}}summary{{end}}">
+  <meta name="twitter:title" content="{{$.PageTitle}}">
+  <meta name="twitter:description" content="{{.Description}}">
+  {{if .Image}}<meta name="twitter:image" content="{{.Image}}">{{end}}
+  {{- end}}
 {{end}}

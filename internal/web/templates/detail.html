@@ -3,6 +3,7 @@
 <head>
   <title>{{if .Item.Title}}{{.Item.Title}} — {{end}}{{.Cfg.SiteTitle}}</title>
   {{template "headtags" .}}
+  {{template "seo" .}}
   {{.TrackingScript}}
 </head>
 <body>
@@ -74,6 +75,12 @@
       {{- end}}
     </div>
   </div>
+
+  <nav class="detail-nav">
+    {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev">&larr; Previous</a>{{else}}<span class="dn-link dn-disabled">&larr; Previous</span>{{end}}
+    <a class="dn-index" href="/">Index</a>
+    {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next &rarr;</a>{{else}}<span class="dn-link dn-disabled">Next &rarr;</span>{{end}}
+  </nav>
 
   {{template "tail" .}}
 </body>
