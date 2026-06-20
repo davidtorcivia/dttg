@@ -156,14 +156,15 @@ input, textarea, select { color:var(--text); }
 .search-toggle:hover { opacity:.5; }
 .search-toggle svg { display:block; }
 
-.search-overlay { position:fixed; inset:0; z-index:9000; display:flex; align-items:flex-start; justify-content:center; padding:14vh 1.5rem 2rem; background:rgba(255,255,255,.5); -webkit-backdrop-filter:blur(7px); backdrop-filter:blur(7px); opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; }
+.search-overlay { position:fixed; inset:0; z-index:9000; display:flex; align-items:flex-start; justify-content:center; padding:14vh 1.5rem 2rem; background:rgba(255,255,255,.8); -webkit-backdrop-filter:blur(18px); backdrop-filter:blur(18px); opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; }
 .search-overlay.open { opacity:1; visibility:visible; }
 .search-panel { width:100%; max-width:720px; transform:translateY(-16px); transition:transform .38s cubic-bezier(.2,.8,.2,1); }
 .search-overlay.open .search-panel { transform:translateY(0); }
 .search-form { display:flex; align-items:center; gap:1rem; border-bottom:1px solid var(--text); padding-bottom:1rem; }
-.search-form-icon { color:var(--faint); flex:0 0 auto; }
+.search-form-icon { color:var(--muted); flex:0 0 auto; }
 .search-form input { flex:1; min-width:0; border:none; outline:none; background:transparent; font-family:inherit; font-size:2rem; font-weight:300; color:var(--text); }
-.search-close { background:none; border:1px solid var(--line); color:var(--faint); font:inherit; font-size:.6rem; text-transform:uppercase; letter-spacing:.1em; padding:.3rem .5rem; cursor:pointer; }
+.search-form input::placeholder { color:var(--muted); opacity:1; }
+.search-close { background:none; border:1px solid var(--muted); color:var(--muted); font:inherit; font-size:.6rem; text-transform:uppercase; letter-spacing:.1em; padding:.3rem .5rem; cursor:pointer; }
 .search-close:hover { color:var(--text); border-color:var(--text); }
 .search-results { margin-top:1rem; max-height:56vh; overflow-y:auto; }
 .search-result { display:flex; gap:1rem; align-items:center; padding:.55rem 0; border-bottom:1px solid var(--line); text-decoration:none; color:inherit; }
@@ -228,13 +229,18 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 :root[data-theme="dark"] .card-img-container img,
 :root[data-theme="dark"] .image-wrapper img,
 :root[data-theme="dark"] .related-item img { filter:contrast(1.04) brightness(.9); }
-:root[data-theme="dark"] .search-overlay { background:rgba(13,13,13,.6); }
+:root[data-theme="dark"] .search-overlay { background:rgba(13,13,13,.82); }
 :root[data-theme="dark"] .doc-tile { background:#1d1d1d; }
 :root[data-theme="dark"] .admin-table img, :root[data-theme="dark"] .admin-thumb img { filter:contrast(1.04) brightness(.9); }
 .header-right { display:flex; align-items:center; gap:.85rem; }
 .theme-toggle { display:inline-flex; align-items:center; color:inherit; background:none; border:none; padding:0; cursor:pointer; transition:opacity .3s, transform .6s cubic-bezier(.2,.8,.2,1); }
 .theme-toggle:hover { opacity:.5; }
 :root[data-theme="dark"] .theme-toggle svg { transform:rotate(180deg); }
+/* owner login — only inside the installed PWA (no address bar to type /login) */
+.pwa-login { display:none; align-items:center; color:inherit; transition:opacity .3s; }
+.pwa-login:hover { opacity:.5; }
+.pwa-login svg { display:block; }
+@media (display-mode: standalone) { .pwa-login { display:inline-flex; } }
 
 /* ---------- view transitions ---------- */
 @view-transition { navigation: auto; }

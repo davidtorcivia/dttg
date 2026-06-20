@@ -36,7 +36,9 @@
     var open = function (e) {
       if (e) e.preventDefault();
       overlay.classList.add('open');
-      if (input) { input.focus(); input.select(); }
+      // focus() is a no-op while the overlay is still visibility:hidden mid-
+      // transition, so defer one frame until it's actually visible.
+      if (input) { requestAnimationFrame(function () { input.focus(); input.select(); }); }
     };
     var hide = function () { overlay.classList.remove('open'); };
 
