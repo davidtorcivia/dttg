@@ -104,8 +104,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 
-	// API (bearer-token auth) — used by the extension + bookmarklet (M4)
-	mux.HandleFunc("POST /api/items", s.tokenAuth(s.handleAPICreateItem))
+	// API (bearer-token auth) — used by the extension + bookmarklet (M4).
+	// CORS-enabled so the browser extension can call them cross-origin; OPTIONS
+	// is registered for the preflight the browser sends before the real request.
+	apiCreate := s.cors(s.tokenAuth(s.handleAPICreateItem))
+	apiTaxonomy := s.cors(s.tokenAuth(s.handleAPITaxonomy))
+	mux.HandleFunc("POST /api/items", apiCreate)
+	mux.HandleFunc("OPTIONS /api/items", apiCreate)
+	mux.HandleFunc("GET /api/taxonomy", apiTaxonomy)
+	mux.HandleFunc("OPTIONS /api/taxonomy", apiTaxonomy)
 
 	// Admin (session auth)
 	mux.HandleFunc("GET /admin", s.requireAdmin(s.handleAdminDashboard))

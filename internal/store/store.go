@@ -261,6 +261,30 @@ func (s *Store) AttachTag(ctx context.Context, itemID, tagID int64) error {
 	return err
 }
 
+// ListTags returns every tag, most-used first (then alphabetical) so callers can
+// surface the relevant ones at the top. Used by the extension's autocomplete.
+func (s *Store) ListTags(ctx context.Context) ([]Tag, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.slug, t.name
+		FROM tags t
+		LEFT JOIN item_tags it ON it.tag_id = t.id
+		GROUP BY t.id
+		ORDER BY COUNT(it.item_id) DESC, t.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Tag
+	for rows.Next() {
+		var t Tag
+		if err := rows.Scan(&t.ID, &t.Slug, &t.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ---------- items ----------
 
 const itemColumns = `

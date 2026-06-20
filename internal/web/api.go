@@ -32,6 +32,25 @@ func (s *Server) tokenAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// cors lets the browser extension (an unpredictable moz-extension:// origin)
+// call the token-authed API cross-origin. Safe to allow any origin here because
+// every request is gated on the bearer token — there is no cookie/credential to
+// hijack. Preflight OPTIONS is answered before auth (it carries no token).
+func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Token")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+		w.Header().Add("Vary", "Origin")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func bearerToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); len(h) >= 7 && strings.EqualFold(h[:7], "bearer ") {
 		return strings.TrimSpace(h[7:])
@@ -56,6 +75,27 @@ func (s *Server) handleAPICreateItem(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":  id,
 		"url": s.cfg.BaseURL + "/item/" + strconv.FormatInt(id, 10),
+	})
+}
+
+// handleAPITaxonomy returns the archive's categories and tags so the extension
+// can autocomplete them. Token-authed (owner-only); never cached by the browser.
+func (s *Server) handleAPITaxonomy(w http.ResponseWriter, r *http.Request) {
+	cats, _ := s.store.ListCategories(r.Context(), true)
+	tags, _ := s.store.ListTags(r.Context())
+	catNames := make([]string, 0, len(cats))
+	for _, c := range cats {
+		catNames = append(catNames, c.Name)
+	}
+	tagNames := make([]string, 0, len(tags))
+	for _, t := range tags {
+		tagNames = append(tagNames, t.Name)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"categories": catNames,
+		"tags":       tagNames,
 	})
 }
 
