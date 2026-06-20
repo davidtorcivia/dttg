@@ -17,6 +17,9 @@
     {{- end}}
   </div>
 
+  <div id="board-more" data-offset="{{len .Items}}" data-cat="{{.ActiveCat}}" data-tag="{{.ActiveTag}}" data-page="48"></div>
+
+  {{template "colophon" .}}
   {{template "tail" .}}
 </body>
 </html>

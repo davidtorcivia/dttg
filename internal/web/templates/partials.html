@@ -1,9 +1,12 @@
 {{define "headtags"}}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){try{var t=localStorage.getItem('dnttg-theme');if(t==='dark'||(t==null&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#111111">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <link rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
+  <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
   <link rel="preload" href="/static/fonts/inter-latin-300-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/inter-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/css/app.css">
@@ -18,7 +21,12 @@
     </a>
   </div>
   <div>{{.Cfg.SiteTitle}}</div>
-  <div id="sys-clock">00:00 // NYC --°F</div>
+  <div class="header-right">
+    <span id="sys-clock">00:00 // NYC --°F</span>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark (D)">
+      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle><path d="M12 3 a9 9 0 0 0 0 18 z" fill="currentColor"></path></svg>
+    </button>
+  </div>
 </div>
 <div class="search-overlay" id="search-overlay">
   <div class="search-panel">
@@ -28,6 +36,21 @@
       <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
     </form>
     <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+<div class="shortcuts" id="shortcuts">
+  <div class="shortcuts-panel">
+    <h2>Keys</h2>
+    <dl>
+      <div><dt>&larr; &rarr;</dt><dd>previous / next item</dd></div>
+      <div><dt>J K</dt><dd>move through the board</dd></div>
+      <div><dt>&crarr;</dt><dd>open</dd></div>
+      <div><dt>/</dt><dd>search</dd></div>
+      <div><dt>G</dt><dd>home</dd></div>
+      <div><dt>D</dt><dd>toggle dark</dd></div>
+      <div><dt>?</dt><dd>this sheet</dd></div>
+      <div><dt>Esc</dt><dd>close</dd></div>
+    </dl>
   </div>
 </div>
 {{if .IsAdmin}}
@@ -49,7 +72,7 @@
 <a href="{{.DetailURL}}" class="card">
   <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
     {{- if .ThumbURL}}
-    <img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
+    <img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy" data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
     {{- else if eq .Kind "document"}}
     <div class="doc-tile">
       <span class="doc-ext">{{fileext .FileName}}</span>
@@ -72,6 +95,16 @@
 </a>
 {{end}}
 
+{{define "colophon"}}
+<footer class="colophon" id="colophon">
+  <div class="col-line">
+    <span class="col-vitals">{{if .Stats}}{{.Stats.Count}} pieces · since {{.Stats.Oldest.Year}}{{end}}</span>
+    <span class="col-mark">{{.Cfg.SiteTitle}}</span>
+    <span class="col-meta">Inter · NYC · <a href="/feed.json">JSON</a> / <a href="/feed.xml">RSS</a></span>
+  </div>
+</footer>
+{{end}}
+
 {{define "seo"}}
   {{- with .Meta}}
   <meta name="description" content="{{.Description}}">
@@ -81,7 +114,7 @@
   <meta property="og:title" content="{{$.PageTitle}}">
   <meta property="og:description" content="{{.Description}}">
   <meta property="og:url" content="{{.URL}}">
-  {{if .Image}}<meta property="og:image" content="{{.Image}}">{{end}}
+  {{if .Image}}<meta property="og:image" content="{{.Image}}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">{{end}}
   <meta name="twitter:card" content="{{if .Image}}summary_large_image{{else}}summary{{end}}">
   <meta name="twitter:title" content="{{$.PageTitle}}">
   <meta name="twitter:description" content="{{.Description}}">

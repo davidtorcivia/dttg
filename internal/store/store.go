@@ -676,6 +676,60 @@ func (s *Store) GetAdjacent(ctx context.Context, it Item, includePrivate bool) (
 	return prevID, nextID, nil
 }
 
+// GetRelated returns items that share a category or any tag with it (excluding
+// it), newest first.
+func (s *Store) GetRelated(ctx context.Context, it Item, limit int, includePrivate bool) ([]Item, error) {
+	vis := ""
+	if !includePrivate {
+		vis = " AND i.visibility='public'"
+	}
+	q := `SELECT DISTINCT` + itemColumns + `
+		FROM items i
+		LEFT JOIN categories c ON c.id = i.category_id
+		WHERE i.id != ?` + vis + ` AND (
+			(? != 0 AND i.category_id = ?)
+			OR i.id IN (SELECT item_id FROM item_tags WHERE tag_id IN
+				(SELECT tag_id FROM item_tags WHERE item_id = ?))
+		)
+		ORDER BY i.created_at DESC, i.id DESC LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, q, it.ID, it.CategoryID, it.CategoryID, it.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		v, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// Stats summarizes the public archive (for the colophon / easter eggs).
+type Stats struct {
+	Count  int
+	Oldest time.Time
+	Newest time.Time
+}
+
+func (s *Store) PublicStats(ctx context.Context) (Stats, error) {
+	var st Stats
+	var oldest, newest sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM items WHERE visibility='public'`).
+		Scan(&st.Count, &oldest, &newest)
+	if oldest.Valid {
+		st.Oldest = time.Unix(oldest.Int64, 0).UTC()
+	}
+	if newest.Valid {
+		st.Newest = time.Unix(newest.Int64, 0).UTC()
+	}
+	return st, err
+}
+
 // Slugify lowercases and hyphenates a string for use in URLs.
 func Slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

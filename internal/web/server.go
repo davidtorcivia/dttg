@@ -79,8 +79,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /category/{slug}", s.handleBoard)
 	mux.HandleFunc("GET /tag/{slug}", s.handleBoard)
 	mux.HandleFunc("GET /item/{id}", s.handleDetail)
+	mux.HandleFunc("GET /item/{id}/og.jpg", s.handleOGImage)
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /api/search", s.handleAPISearch)
+	mux.HandleFunc("GET /api/stats", s.handleAPIStats)
+	mux.HandleFunc("GET /board/more", s.handleBoardMore)
+	mux.HandleFunc("GET /feed.json", s.handleFeedJSON)
+	mux.HandleFunc("GET /feed.xml", s.handleFeedRSS)
 
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)

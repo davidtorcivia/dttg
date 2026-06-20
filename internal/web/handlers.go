@@ -47,7 +47,11 @@ type pageData struct {
 	Meta           metaTags      // SEO / OG tags
 	PrevURL        string        // detail page: newer item
 	NextURL        string        // detail page: older item
+	Related        []itemView    // detail page: related items
+	Stats          *store.Stats  // board footer / colophon
 }
+
+const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
 
 func (s *Server) page(r *http.Request, title string) pageData {
 	isAdmin := s.isAdmin(r)
@@ -164,7 +168,7 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Limit: 120}
+	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Limit: boardPage}
 	slug := r.PathValue("slug")
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/category/"):
@@ -185,7 +189,45 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		pd.Items = append(pd.Items, s.view(it))
 	}
+	if st, err := s.store.PublicStats(r.Context()); err == nil {
+		pd.Stats = &st
+	}
 	s.render(w, "index.html", pd)
+}
+
+// handleBoardMore returns the next page of board cards as an HTML fragment
+// (used by infinite scroll).
+func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	f := store.ItemFilter{
+		IncludePrivate: s.isAdmin(r),
+		Limit:          boardPage,
+		Offset:         offset,
+		CategorySlug:   r.URL.Query().Get("cat"),
+		TagSlug:        r.URL.Query().Get("tag"),
+	}
+	items, err := s.store.ListItems(r.Context(), f)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	for _, it := range items {
+		if err := s.tmpl.ExecuteTemplate(w, "card", s.view(it)); err != nil {
+			log.Printf("render card: %v", err)
+		}
+	}
+}
+
+// handleAPIStats returns public archive vitals (for the colophon / easter eggs).
+func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
+	st, _ := s.store.PublicStats(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"count":  st.Count,
+		"oldest": st.Oldest.Format("Jan 2, 2006"),
+		"newest": st.Newest.Format("Jan 2, 2006"),
+	})
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
@@ -213,9 +255,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	if d := itemDescription(*it); d != "" {
 		pd.Meta.Description = d
 	}
-	if v.CoverURL != "" {
-		pd.Meta.Image = s.absURL(v.CoverURL)
-	}
+	pd.Meta.Image = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
 	if it.Title == "" {
 		pd.PageTitle = s.cfg.SiteTitle
 	}
@@ -227,6 +267,13 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if nextID != 0 {
 		pd.NextURL = "/item/" + strconv.FormatInt(nextID, 10)
+	}
+
+	// Related items
+	if rel, err := s.store.GetRelated(r.Context(), *it, 6, s.isAdmin(r)); err == nil {
+		for _, ri := range rel {
+			pd.Related = append(pd.Related, s.view(ri))
+		}
 	}
 
 	s.render(w, "detail.html", pd)

@@ -168,4 +168,217 @@
     fetchWeather();
     setInterval(fetchWeather, 15 * 60 * 1000);
   }
+
+  var typing = function (el) { return el && el.matches && el.matches('input, textarea, select'); };
+
+  // ---- view transition names (shared-element morph board <-> detail) ----
+  document.querySelectorAll('[data-vt]').forEach(function (el) {
+    try { el.style.viewTransitionName = el.getAttribute('data-vt'); } catch (e) {}
+  });
+
+  // ---- dark mode (toggle button + D key + system default already applied in <head>) ----
+  (function () {
+    var root = document.documentElement;
+    var set = function (dark) {
+      if (dark) root.setAttribute('data-theme', 'dark'); else root.removeAttribute('data-theme');
+      try { localStorage.setItem('dnttg-theme', dark ? 'dark' : 'light'); } catch (e) {}
+    };
+    window.__toggleTheme = function () { set(root.getAttribute('data-theme') !== 'dark'); };
+    var t = document.getElementById('theme-toggle');
+    if (t) t.addEventListener('click', window.__toggleTheme);
+  })();
+
+  // ---- lightbox ----
+  (function () {
+    var box = document.getElementById('lightbox');
+    var img = document.getElementById('lightbox-img');
+    if (!box || !img) return;
+    document.querySelectorAll('.zoomable').forEach(function (z) {
+      z.addEventListener('click', function () { img.src = z.getAttribute('data-full') || z.src; box.classList.add('open'); });
+    });
+    box.addEventListener('click', function (e) { if (e.target === box) box.classList.remove('open'); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') box.classList.remove('open'); });
+  })();
+
+  // ---- shortcuts sheet + global keys (?, g, d, esc) ----
+  (function () {
+    var sheet = document.getElementById('shortcuts');
+    document.addEventListener('keydown', function (e) {
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === '?') { if (sheet) sheet.classList.toggle('open'); }
+      else if (e.key === 'Escape') { if (sheet) sheet.classList.remove('open'); }
+      else if (e.key === 'g' || e.key === 'G') { window.location.href = '/'; }
+      else if (e.key === 'd' || e.key === 'D') { if (window.__toggleTheme) window.__toggleTheme(); }
+    });
+    if (sheet) sheet.addEventListener('click', function (e) { if (e.target === sheet) sheet.classList.remove('open'); });
+  })();
+
+  // ---- board keyboard nav (j/k/arrows + enter) ----
+  (function () {
+    var grid = document.getElementById('grid');
+    if (!grid) return;
+    var idx = -1;
+    var cards = function () { return Array.prototype.slice.call(grid.querySelectorAll('.card')); };
+    var focus = function (n) {
+      var list = cards();
+      if (!list.length) return;
+      if (idx >= 0 && list[idx]) list[idx].classList.remove('kbd-focus');
+      idx = Math.max(0, Math.min(n, list.length - 1));
+      list[idx].classList.add('kbd-focus');
+      list[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    };
+    document.addEventListener('keydown', function (e) {
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') { e.preventDefault(); focus(idx + 1); }
+      else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') { e.preventDefault(); focus(idx - 1); }
+      else if (e.key === 'Enter' && idx >= 0) { var l = cards()[idx]; if (l) l.click(); }
+    });
+  })();
+
+  // ---- infinite scroll ----
+  (function () {
+    var sentinel = document.getElementById('board-more');
+    var grid = document.getElementById('grid');
+    if (!sentinel || !grid) return;
+    var page = parseInt(sentinel.dataset.page || '48', 10);
+    var offset = parseInt(sentinel.dataset.offset || '0', 10);
+    var cat = sentinel.dataset.cat || '', tag = sentinel.dataset.tag || '';
+    var done = offset < page, loading = false;
+    var load = function () {
+      if (loading || done) return;
+      loading = true;
+      var q = '/board/more?offset=' + offset + (cat ? '&cat=' + encodeURIComponent(cat) : '') + (tag ? '&tag=' + encodeURIComponent(tag) : '');
+      fetch(q).then(function (r) { return r.text(); }).then(function (html) {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        var added = tmp.querySelectorAll('.card');
+        added.forEach(function (card) {
+          var img = card.querySelector('img[data-ph]');
+          if (img) { var c = img.parentElement; c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")'; c.style.backgroundSize = 'cover'; c.style.backgroundPosition = 'center'; }
+          var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
+          card.classList.add('visible');
+          grid.appendChild(card);
+        });
+        offset += added.length;
+        if (added.length < page) done = true;
+        loading = false;
+      }).catch(function () { loading = false; });
+    };
+    new IntersectionObserver(function (en) { en.forEach(function (x) { if (x.isIntersecting) load(); }); }, { rootMargin: '700px' }).observe(sentinel);
+  })();
+
+  // ---- colophon reveal (past the end) ----
+  (function () {
+    var col = document.getElementById('colophon');
+    if (!col) return;
+    var io = new IntersectionObserver(function (en) {
+      en.forEach(function (x) { if (x.isIntersecting) { col.classList.add('revealed'); io.disconnect(); } });
+    }, { threshold: 0.2 });
+    io.observe(col);
+  })();
+
+  // ===== easter eggs =====
+
+  // console colophon
+  try {
+    console.log('%cDO NOT TOUCH THE GLASS', 'font:600 22px sans-serif;color:#111;background:#fff;padding:6px 10px;');
+    console.log('%cyou found the back of the glass. — D.T.', 'color:#888;font-style:italic');
+  } catch (e) {}
+
+  // touch the glass — a smudge + ripple where you press an open image
+  (function () {
+    var smudge = function (x, y) {
+      var el = document.createElement('div');
+      el.className = 'smudge';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.innerHTML = '<span class="ring"></span><span class="word">Do not touch the glass</span>';
+      document.body.appendChild(el);
+      setTimeout(function () { el.remove(); }, 1700);
+    };
+    document.addEventListener('pointerdown', function (e) {
+      var t = e.target;
+      if (t && t.tagName === 'IMG' && t.closest('.image-wrapper, .lightbox')) smudge(e.clientX, e.clientY);
+    });
+  })();
+
+  // lights out — Konami code flips dark mode with a flash
+  (function () {
+    var seq = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65], pos = 0;
+    document.addEventListener('keydown', function (e) {
+      pos = (e.keyCode === seq[pos]) ? pos + 1 : (e.keyCode === seq[0] ? 1 : 0);
+      if (pos === seq.length) {
+        pos = 0;
+        document.body.classList.add('flash-invert');
+        setTimeout(function () { document.body.classList.remove('flash-invert'); }, 550);
+        if (window.__toggleTheme) window.__toggleTheme();
+      }
+    });
+  })();
+
+  // ken burns idle screensaver (single timer, reset on activity)
+  (function () {
+    if (!document.getElementById('grid')) return;
+    var timer, hint;
+    var sleep = function () {
+      document.body.classList.add('screensaver');
+      hint = document.createElement('div');
+      hint.className = 'screensaver-hint';
+      hint.textContent = "you're still looking.";
+      document.body.appendChild(hint);
+    };
+    var wake = function () {
+      if (document.body.classList.contains('screensaver')) {
+        document.body.classList.remove('screensaver');
+        if (hint) { hint.remove(); hint = null; }
+      }
+      clearTimeout(timer);
+      timer = setTimeout(sleep, 90000);
+    };
+    ['mousemove', 'keydown', 'scroll', 'touchstart', 'pointerdown'].forEach(function (ev) {
+      window.addEventListener(ev, wake, { passive: true });
+    });
+    wake();
+  })();
+
+  // datamosh the wordmark on a triple-click
+  (function () {
+    var mark = document.querySelector('.header-left + div');
+    if (!mark) return;
+    var n = 0, t;
+    mark.style.cursor = 'pointer';
+    mark.addEventListener('click', function () {
+      n++; clearTimeout(t); t = setTimeout(function () { n = 0; }, 500);
+      if (n >= 3) { n = 0; mark.classList.remove('datamosh'); void mark.offsetWidth; mark.classList.add('datamosh'); }
+    });
+  })();
+
+  // seance — park the cursor dead-center to read the glass
+  (function () {
+    var box = null, timer = null;
+    var open = function () {
+      box = document.createElement('div');
+      box.className = 'seance';
+      box.innerHTML = '<div class="seance-inner"><div class="big">…</div><div class="sub">reading the glass</div></div>';
+      document.body.appendChild(box);
+      requestAnimationFrame(function () { box.classList.add('open'); });
+      fetch('/api/stats').then(function (r) { return r.json(); }).then(function (d) {
+        if (!box) return;
+        box.querySelector('.big').textContent = d.count + ' pieces';
+        box.querySelector('.sub').textContent = 'archived since ' + d.oldest + ' — you may look, but do not touch';
+      }).catch(function () {});
+      var close = function () {
+        if (!box) return;
+        var b = box; box = null; b.classList.remove('open'); setTimeout(function () { b.remove(); }, 600);
+        document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close);
+      };
+      setTimeout(function () { document.addEventListener('pointerdown', close); document.addEventListener('keydown', close); }, 60);
+    };
+    document.addEventListener('mousemove', function (e) {
+      if (box) return;
+      var near = Math.abs(e.clientX - window.innerWidth / 2) < 40 && Math.abs(e.clientY - window.innerHeight / 2) < 40;
+      clearTimeout(timer);
+      if (near) timer = setTimeout(open, 2200);
+    });
+  })();
 })();

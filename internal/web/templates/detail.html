@@ -16,7 +16,7 @@
       {{- if and (eq .Kind "embed") .EmbedHTML}}
       <div class="embed-wrap">{{safeHTML .EmbedHTML}}</div>
       {{- else if .CoverURL}}
-      <img src="{{.CoverURL}}" alt="{{.Title}}">
+      <img src="{{.CoverURL}}" alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}">
       {{- else if eq .Kind "document"}}
         {{- if eq .FileMime "application/pdf"}}
       <iframe class="pdf-frame" src="{{.FileURL}}#view=FitH" title="{{.FileName}}"></iframe>
@@ -76,11 +76,27 @@
     </div>
   </div>
 
+  {{if .Related}}
+  <section class="related">
+    <h3>Related</h3>
+    <div class="related-grid">
+      {{- range .Related}}
+      <a href="{{.DetailURL}}" class="related-item">
+        {{- if .ThumbURL}}<img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy">
+        {{- else}}<span class="related-tile">{{if eq .Kind "document"}}{{fileext .FileName}}{{else}}{{.Kind}}{{end}}</span>{{end}}
+      </a>
+      {{- end}}
+    </div>
+  </section>
+  {{end}}
+
   <nav class="detail-nav">
     {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev">&larr; Previous</a>{{else}}<span class="dn-link dn-disabled">&larr; Previous</span>{{end}}
     <a class="dn-index" href="/">Index</a>
     {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next &rarr;</a>{{else}}<span class="dn-link dn-disabled">Next &rarr;</span>{{end}}
   </nav>
+
+  <div class="lightbox" id="lightbox"><img id="lightbox-img" src="" alt=""></div>
 
   {{template "tail" .}}
 </body>
