@@ -89,8 +89,28 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		}
 
 	case in.URL != "":
+		// 0) tweets: pull the specific photo (and text) via FixTweet, not the OG
+		//    composite of every image in the tweet.
+		tweetHandled := false
+		if id, photoIdx, ok := isTweetURL(in.URL); ok {
+			if t, err := s.fetchTweet(ctx, id); err == nil && t != nil {
+				it.LinkDescription = t.Text
+				it.LinkSiteName = "x.com"
+				setIfEmpty(&it.Title, t.Author)
+				it.SourceURL = cleanTweetURL(in.URL)
+				if photoURL := t.photo(photoIdx); photoURL != "" {
+					if r, e := s.fetch(ctx, photoURL); e == nil && strings.HasPrefix(r.ContentType, "image/") {
+						kind, imageBytes, imageCT = "image", r.Body, r.ContentType
+					}
+				}
+				if kind == "" {
+					kind = "link" // text-only tweet (or photo fetch failed): keep the text as the quote
+				}
+				tweetHandled = true
+			}
+		}
 		// 1) embed providers (YouTube/Vimeo via oEmbed)
-		if kind == "" || kind == "embed" {
+		if !tweetHandled && (kind == "" || kind == "embed") {
 			if prov := embedProviderFor(in.URL); prov != "" {
 				if info, err := s.fetchEmbed(ctx, in.URL, prov); err == nil {
 					kind = "embed"
@@ -106,7 +126,7 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 			}
 		}
 		// 2) otherwise fetch and decide image / document / link
-		if kind != "embed" {
+		if !tweetHandled && kind != "embed" {
 			r, err := s.fetch(ctx, in.URL)
 			switch {
 			case err != nil:
