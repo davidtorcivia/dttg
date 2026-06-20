@@ -49,6 +49,7 @@ type pageData struct {
 	NextURL        string        // detail page: older item
 	Related        []itemView    // detail page: related items
 	Stats          *store.Stats  // board footer / colophon
+	ColorScheme    string        // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
@@ -59,11 +60,21 @@ func (s *Server) page(r *http.Request, title string) pageData {
 	if err != nil {
 		log.Printf("list categories: %v", err)
 	}
+	// The client mirrors an explicit light/dark choice into this cookie so the server
+	// can declare color-scheme in the served HTML head from byte 0. That makes the
+	// browser's very first paint (including the canvas it shows between page
+	// navigations) match the chosen theme — which is what kills the white flash in
+	// Firefox, where a JS-set color-scheme lands too late. No cookie => follow the OS.
+	colorScheme := "light dark"
+	if c, err := r.Cookie("dnttg-theme"); err == nil && (c.Value == "dark" || c.Value == "light") {
+		colorScheme = c.Value
+	}
 	pd := pageData{
-		Cfg:        s.cfg,
-		IsAdmin:    isAdmin,
-		Categories: cats,
-		PageTitle:  title,
+		Cfg:         s.cfg,
+		IsAdmin:     isAdmin,
+		Categories:  cats,
+		PageTitle:   title,
+		ColorScheme: colorScheme,
 		Meta: metaTags{
 			Description: s.cfg.SiteTitle + " — a personal visual archive.",
 			URL:         s.absURL(r.URL.Path),

@@ -1,7 +1,8 @@
 {{define "headtags"}}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>(function(){try{var d=document.documentElement,t=localStorage.getItem('dnttg-theme');if(t!=='light'&&t!=='dark'){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}d.setAttribute('data-theme',t);d.style.colorScheme=t;}catch(e){}})();</script>
+  <meta name="color-scheme" content="{{.ColorScheme}}">
+  <script>(function(){try{var d=document.documentElement,t=localStorage.getItem('dnttg-theme'),x=(t==='light'||t==='dark');if(!x){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}d.setAttribute('data-theme',t);d.style.colorScheme=t;if(x){document.cookie='dnttg-theme='+t+';path=/;max-age=31536000;samesite=lax';}}catch(e){}})();</script>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="manifest" href="/manifest.webmanifest">

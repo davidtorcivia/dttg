@@ -41,7 +41,7 @@ type Server struct {
 func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service, bc BackupController) (*Server, error) {
 	assetVer := assetVersion()
 	funcs := template.FuncMap{
-		"shortDate": func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02")) },
+		"shortDate": func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02 06")) },
 		"longDate":  func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02, 2006")) },
 		"pad3":      func(n int64) string { return fmt.Sprintf("%03d", n) },
 		"upper":     strings.ToUpper,
