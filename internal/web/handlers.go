@@ -310,6 +310,7 @@ func itemDescription(it store.Item) string {
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache") // HTML is dynamic; always revalidate
 	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
 		log.Printf("render %s: %v", name, err)
 	}

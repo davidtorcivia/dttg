@@ -11,7 +11,7 @@
   <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
   <link rel="preload" href="/static/fonts/inter-latin-300-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/inter-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="{{asset "/static/css/app.css"}}">
 {{end}}
 
 {{define "sysheader"}}
@@ -67,7 +67,7 @@
 {{end}}
 
 {{define "tail"}}
-<script src="/static/js/app.js"></script>
+<script src="{{asset "/static/js/app.js"}}"></script>
 {{end}}
 
 {{define "card"}}

@@ -5,6 +5,7 @@ package web
 import (
 	"embed"
 	"fmt"
+	"hash/fnv"
 	"html/template"
 	"io/fs"
 	"log"
@@ -38,6 +39,7 @@ type Server struct {
 }
 
 func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service, bc BackupController) (*Server, error) {
+	assetVer := assetVersion()
 	funcs := template.FuncMap{
 		"shortDate": func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02")) },
 		"longDate":  func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02, 2006")) },
@@ -48,6 +50,7 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 		"host":      hostname,
 		"hasPrefix": strings.HasPrefix,
 		"safeHTML":  func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec // admin/oEmbed-trusted
+		"asset":     func(p string) string { return p + "?v=" + assetVer },
 	}
 	tmpl, err := template.New("dnttg").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
@@ -68,7 +71,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	staticSub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
+	mux.Handle("GET /static/", cacheControl("public, max-age=604800",
+		http.StripPrefix("/static/", http.FileServer(http.FS(staticSub)))))
 	mux.Handle("GET /media/", http.StripPrefix("/media/", http.FileServer(http.Dir(s.cfg.MediaDir))))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -128,9 +132,30 @@ func (s *Server) serveEmbedded(name, contentType string) http.HandlerFunc {
 		w.Header().Set("Content-Type", contentType)
 		if name == "sw.js" {
 			w.Header().Set("Service-Worker-Allowed", "/")
+			w.Header().Set("Cache-Control", "no-cache") // let SW updates be picked up promptly
 		}
 		_, _ = w.Write(data)
 	}
+}
+
+// cacheControl wraps a handler, adding a Cache-Control header.
+func cacheControl(value string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", value)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// assetVersion is a short content hash of the CSS+JS, used to fingerprint static
+// asset URLs (?v=…) so every change busts browser/CDN caches automatically.
+func assetVersion() string {
+	h := fnv.New64a()
+	for _, p := range []string{"static/css/app.css", "static/js/app.js"} {
+		if b, err := staticFS.ReadFile(p); err == nil {
+			_, _ = h.Write(b)
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum64())
 }
 
 func logRequests(next http.Handler) http.Handler {
