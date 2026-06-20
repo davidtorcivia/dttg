@@ -1,7 +1,7 @@
 {{define "headtags"}}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>(function(){try{var t=localStorage.getItem('dnttg-theme');if(t==='dark'||(t==null&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
+  <script>(function(){try{var t=localStorage.getItem('dnttg-theme');if(t!=='light'&&t!=='dark'){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#111111">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">

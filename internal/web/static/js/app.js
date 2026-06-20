@@ -176,16 +176,27 @@
     try { el.style.viewTransitionName = el.getAttribute('data-vt'); } catch (e) {}
   });
 
-  // ---- dark mode (toggle button + D key + system default already applied in <head>) ----
+  // ---- dark mode ----
+  // A click is authoritative: it sets an explicit data-theme AND persists it, so it
+  // always wins. The OS preference is only the default until you've chosen, and a
+  // live OS change is applied only while no choice is stored ("auto").
   (function () {
     var root = document.documentElement;
-    var set = function (dark) {
-      if (dark) root.setAttribute('data-theme', 'dark'); else root.removeAttribute('data-theme');
-      try { localStorage.setItem('dnttg-theme', dark ? 'dark' : 'light'); } catch (e) {}
+    var apply = function (theme, persist) {
+      root.setAttribute('data-theme', theme);
+      if (persist) { try { localStorage.setItem('dnttg-theme', theme); } catch (e) {} }
     };
-    window.__toggleTheme = function () { set(root.getAttribute('data-theme') !== 'dark'); };
-    var t = document.getElementById('theme-toggle');
-    if (t) t.addEventListener('click', window.__toggleTheme);
+    window.__toggleTheme = function () {
+      apply(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
+    };
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.addEventListener('click', window.__toggleTheme);
+    try {
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+        var saved = localStorage.getItem('dnttg-theme');
+        if (saved !== 'light' && saved !== 'dark') apply(e.matches ? 'dark' : 'light', false);
+      });
+    } catch (e) {}
   })();
 
   // ---- lightbox ----
