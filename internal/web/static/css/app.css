@@ -257,7 +257,13 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 .related { max-width:1600px; margin:4rem 0 0; }
 .related h3 { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:var(--faint); margin-bottom:1.2rem; }
 .related-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:1rem; }
-.related-item { display:block; aspect-ratio:1; overflow:hidden; background:var(--line); }
+.related-item { display:block; aspect-ratio:1; overflow:hidden; background:var(--line); opacity:0; transform:translateY(18px); transition:opacity .6s cubic-bezier(.2,.8,.2,1), transform .6s cubic-bezier(.2,.8,.2,1); }
+.related.revealed .related-item { opacity:1; transform:translateY(0); }
+.related.revealed .related-item:nth-child(2){transition-delay:.06s}
+.related.revealed .related-item:nth-child(3){transition-delay:.12s}
+.related.revealed .related-item:nth-child(4){transition-delay:.18s}
+.related.revealed .related-item:nth-child(5){transition-delay:.24s}
+.related.revealed .related-item:nth-child(6){transition-delay:.3s}
 .related-item img { width:100%; height:100%; object-fit:cover; display:block; filter:contrast(1.1); transition:opacity .3s; }
 .related-item:hover img { opacity:.6; }
 .related-tile { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:var(--text); color:var(--bg); font-size:.55rem; text-transform:uppercase; letter-spacing:.1em; }
@@ -277,8 +283,17 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 body.flash-invert { animation:flashInvert .55s ease; }
 @keyframes flashInvert { 0% { filter:invert(1); } 100% { filter:invert(0); } }
 
-body.screensaver .card-img-container img { animation:kenburns 24s ease-in-out infinite alternate; }
-@keyframes kenburns { from { transform:scale(1) translate(0,0); } to { transform:scale(1.08) translate(-1.5%,-1.5%); } }
+/* clip the zoom to each frame, and ease in/out so it doesn't snap */
+body.screensaver .card-img-container { overflow:hidden; }
+.card-img-container img { transition:transform 1.3s ease; }
+body.screensaver .card-img-container img { animation:kb 30s ease-in-out infinite alternate both; }
+/* desync each image (different drift, duration, phase) so it feels organic */
+body.screensaver .card:nth-child(2n) .card-img-container img { animation-name:kb2; animation-duration:36s; animation-delay:2.5s; }
+body.screensaver .card:nth-child(3n) .card-img-container img { animation-name:kb3; animation-duration:33s; animation-delay:5s; }
+body.screensaver .card:nth-child(4n+1) .card-img-container img { animation-duration:40s; animation-delay:8s; }
+@keyframes kb  { from { transform:scale(1) translate(0,0); } to { transform:scale(1.10) translate(-2%,-2%); } }
+@keyframes kb2 { from { transform:scale(1) translate(0,0); } to { transform:scale(1.08) translate(2%,-1%); } }
+@keyframes kb3 { from { transform:scale(1) translate(0,0); } to { transform:scale(1.12) translate(-1%,2%); } }
 .screensaver-hint { position:fixed; left:50%; bottom:8vh; transform:translateX(-50%); z-index:8000; font-size:.7rem; letter-spacing:.2em; text-transform:uppercase; color:var(--faint); pointer-events:none; animation:fadeHint 6s ease forwards; }
 @keyframes fadeHint { 0%,100% { opacity:0; } 35%,70% { opacity:.7; } }
 
@@ -290,6 +305,8 @@ body.screensaver .card-img-container img { animation:kenburns 24s ease-in-out in
 .seance-inner { color:#fff; text-align:center; font-weight:300; padding:2rem; }
 .seance-inner .big { font-size:3rem; letter-spacing:-.02em; line-height:1.1; }
 .seance-inner .sub { font-size:.7rem; text-transform:uppercase; letter-spacing:.2em; color:#aaa; margin-top:1.2rem; }
+.seance.open .seance-inner { animation:seanceIn .9s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes seanceIn { from { opacity:0; transform:translateY(14px); filter:blur(5px); } to { opacity:1; transform:translateY(0); filter:blur(0); } }
 
 @media (max-width:600px) {
   .search-form input, .search-page-form input { font-size:1.4rem; }

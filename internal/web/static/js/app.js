@@ -277,6 +277,16 @@
     io.observe(col);
   })();
 
+  // ---- related items reveal (staggered, on scroll into view) ----
+  (function () {
+    var rel = document.querySelector('.related');
+    if (!rel) return;
+    var io = new IntersectionObserver(function (en) {
+      en.forEach(function (x) { if (x.isIntersecting) { rel.classList.add('revealed'); io.disconnect(); } });
+    }, { threshold: 0.15 });
+    io.observe(rel);
+  })();
+
   // ===== easter eggs =====
 
   // console colophon
@@ -364,8 +374,17 @@
       requestAnimationFrame(function () { box.classList.add('open'); });
       fetch('/api/stats').then(function (r) { return r.json(); }).then(function (d) {
         if (!box) return;
-        box.querySelector('.big').textContent = d.count + ' pieces';
-        box.querySelector('.sub').textContent = 'archived since ' + d.oldest + ' — you may look, but do not touch';
+        var big = box.querySelector('.big'), sub = box.querySelector('.sub');
+        var target = d.count || 0, t0 = null;
+        var tick = function (ts) {
+          if (!box) return;
+          if (t0 == null) t0 = ts;
+          var p = Math.min((ts - t0) / 1100, 1);
+          big.textContent = Math.round((1 - Math.pow(1 - p, 3)) * target) + ' pieces';
+          if (p < 1) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        sub.textContent = 'archived since ' + d.oldest + ' — you may look, but do not touch';
       }).catch(function () {});
       var close = function () {
         if (!box) return;
