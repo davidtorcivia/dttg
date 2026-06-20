@@ -215,6 +215,7 @@
     var root = document.documentElement;
     var apply = function (theme, persist) {
       root.setAttribute('data-theme', theme);
+      root.style.colorScheme = theme;
       if (persist) { try { localStorage.setItem('dnttg-theme', theme); } catch (e) {} }
     };
     window.__toggleTheme = function () {
