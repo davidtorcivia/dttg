@@ -49,7 +49,7 @@ a { color:inherit; }
 .tags a::before { content:"#"; opacity:.5; }
 .tags a:hover { color:var(--text); }
 .note-content { font-size:1.1rem; line-height:1.8; color:var(--text); font-weight:300; }
-.detail-nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; max-width:1600px; margin:4rem 0 0; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
+.detail-nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:2.5rem 0 0; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
 .detail-nav .dn-link { text-decoration:none; color:var(--text); transition:opacity .3s; }
 .detail-nav .dn-link:hover { opacity:.5; }
 .detail-nav .dn-index { text-decoration:none; color:var(--faint); transition:color .3s; }
@@ -216,6 +216,9 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 :root[data-theme="dark"] .card-img-container img,
 :root[data-theme="dark"] .image-wrapper img,
 :root[data-theme="dark"] .related-item img { filter:contrast(1.04) brightness(.9); }
+:root[data-theme="dark"] .search-overlay { background:rgba(13,13,13,.6); }
+:root[data-theme="dark"] .doc-tile { background:#1d1d1d; }
+:root[data-theme="dark"] .admin-table img, :root[data-theme="dark"] .admin-thumb img { filter:contrast(1.04) brightness(.9); }
 .header-right { display:flex; align-items:center; gap:.85rem; }
 .theme-toggle { display:inline-flex; align-items:center; color:inherit; background:none; border:none; padding:0; cursor:pointer; transition:opacity .3s, transform .6s cubic-bezier(.2,.8,.2,1); }
 .theme-toggle:hover { opacity:.5; }

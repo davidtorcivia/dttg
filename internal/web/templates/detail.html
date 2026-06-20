@@ -67,6 +67,12 @@
       <div class="note-content">{{.Item.LinkDescription}}</div>
       {{- end}}
 
+      <nav class="detail-nav">
+        {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev">&larr; Previous</a>{{else}}<span class="dn-link dn-disabled">&larr; Previous</span>{{end}}
+        <a class="dn-index" href="/">Index</a>
+        {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next &rarr;</a>{{else}}<span class="dn-link dn-disabled">Next &rarr;</span>{{end}}
+      </nav>
+
       {{- if .IsAdmin}}
       <div class="detail-admin">
         <a href="/admin/items/{{.Item.ID}}/edit">Edit</a>
@@ -89,12 +95,6 @@
     </div>
   </section>
   {{end}}
-
-  <nav class="detail-nav">
-    {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev">&larr; Previous</a>{{else}}<span class="dn-link dn-disabled">&larr; Previous</span>{{end}}
-    <a class="dn-index" href="/">Index</a>
-    {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next &rarr;</a>{{else}}<span class="dn-link dn-disabled">Next &rarr;</span>{{end}}
-  </nav>
 
   <div class="lightbox" id="lightbox"><img id="lightbox-img" src="" alt=""></div>
 

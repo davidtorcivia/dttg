@@ -376,9 +376,9 @@
     };
     document.addEventListener('mousemove', function (e) {
       if (box) return;
-      var near = Math.abs(e.clientX - window.innerWidth / 2) < 40 && Math.abs(e.clientY - window.innerHeight / 2) < 40;
+      var near = Math.abs(e.clientX - window.innerWidth / 2) < 110 && Math.abs(e.clientY - window.innerHeight / 2) < 110;
       clearTimeout(timer);
-      if (near) timer = setTimeout(open, 2200);
+      if (near) timer = setTimeout(open, 1600);
     });
   })();
 })();
