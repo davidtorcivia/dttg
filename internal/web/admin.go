@@ -20,6 +20,7 @@ type BackupController interface {
 
 type settingsView struct {
 	Tracking string
+	Columns  int // wide-screen board columns (3 or 4)
 	Backup   backupView
 }
 
@@ -156,7 +157,7 @@ func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	tracking, _ := s.store.GetSetting(r.Context(), "tracking_script")
-	sv := &settingsView{Tracking: tracking}
+	sv := &settingsView{Tracking: tracking, Columns: s.boardColumns(r.Context())}
 	sv.Backup.Enabled = s.backup != nil
 	if s.backup != nil {
 		last, count, lerr := s.backup.Status()
@@ -171,6 +172,14 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	if err := s.store.SetSetting(r.Context(), "tracking_script", r.FormValue("tracking_script")); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	cols := "3"
+	if r.FormValue("board_columns") == "4" {
+		cols = "4"
+	}
+	if err := s.store.SetSetting(r.Context(), "board_columns", cols); err != nil {
 		s.serverError(w, err)
 		return
 	}

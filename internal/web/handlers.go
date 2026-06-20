@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -50,6 +51,7 @@ type pageData struct {
 	Related        []itemView    // detail page: related items
 	Stats          *store.Stats  // board footer / colophon
 	ColorScheme    string        // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
+	BoardColumns   int           // masonry columns on wide screens (3 or 4)
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
@@ -198,6 +200,15 @@ func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// boardColumns is the configured masonry column count for wide screens. Only 3
+// (default) or 4 are allowed; narrower viewports step down via CSS regardless.
+func (s *Server) boardColumns(ctx context.Context) int {
+	if v, _ := s.store.GetSetting(ctx, "board_columns"); v == "4" {
+		return 4
+	}
+	return 3
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Limit: boardPage}
 	slug := r.PathValue("slug")
@@ -217,6 +228,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	pd := s.page(r, s.cfg.SiteTitle)
 	pd.ActiveCat = f.CategorySlug
 	pd.ActiveTag = f.TagSlug
+	pd.BoardColumns = s.boardColumns(r.Context())
 	for _, it := range items {
 		pd.Items = append(pd.Items, s.view(it))
 	}

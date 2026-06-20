@@ -22,7 +22,7 @@ input, textarea, select { color:var(--text); }
 .cats a span { font-size:.6rem; color:var(--faint); }
 
 /* ---------- masonry grid ---------- */
-.grid { column-count:3; column-gap:2rem; }
+.grid { column-count:var(--cols,3); column-gap:2rem; }
 .card { break-inside:avoid; display:flex; gap:.8rem; align-items:stretch; border-top:1px solid var(--line); padding-top:1rem; margin-bottom:4rem; cursor:pointer; text-decoration:none; color:inherit; opacity:0; transform:translateY(40px); transition:opacity .8s cubic-bezier(.2,.8,.2,1), transform .8s cubic-bezier(.2,.8,.2,1); }
 .card.visible { opacity:1; transform:translateY(0); }
 .card.visible:hover { opacity:.6; transition-duration:.3s; }

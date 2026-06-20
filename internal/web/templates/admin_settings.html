@@ -10,6 +10,13 @@
     <h1>Settings</h1>
 
     <form method="POST" action="/admin/settings">
+      <label>Board columns (wide screens)
+        <span>Masonry columns on wide screens. 4 packs items smaller; narrower screens step down automatically. Default 3.</span>
+        <select name="board_columns">
+          <option value="3"{{if eq .Settings.Columns 3}} selected{{end}}>3 — larger items (default)</option>
+          <option value="4"{{if eq .Settings.Columns 4}} selected{{end}}>4 — smaller items</option>
+        </select>
+      </label>
       <label>Analytics / tracking snippet
         <span>Pasted raw into the &lt;head&gt; of public pages only (Umami, Plausible, etc.). Leave blank to disable.</span>
         <textarea name="tracking_script" rows="6" class="mono" placeholder="Paste your analytics script tag here">{{.Settings.Tracking}}</textarea>
