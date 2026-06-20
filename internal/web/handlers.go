@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"html/template"
@@ -51,6 +52,7 @@ type pageData struct {
 	Related        []itemView    // detail page: related items
 	Stats          *store.Stats  // board footer / colophon
 	ColorScheme    string        // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
+	ThemeAttr      string        // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
 	BoardColumns   int           // masonry columns on wide screens (3 or 4)
 }
 
@@ -68,8 +70,10 @@ func (s *Server) page(r *http.Request, title string) pageData {
 	// navigations) match the chosen theme — which is what kills the white flash in
 	// Firefox, where a JS-set color-scheme lands too late. No cookie => follow the OS.
 	colorScheme := "light dark"
+	themeAttr := ""
 	if c, err := r.Cookie("dnttg-theme"); err == nil && (c.Value == "dark" || c.Value == "light") {
 		colorScheme = c.Value
+		themeAttr = c.Value
 	}
 	pd := pageData{
 		Cfg:         s.cfg,
@@ -77,6 +81,7 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		Categories:  cats,
 		PageTitle:   title,
 		ColorScheme: colorScheme,
+		ThemeAttr:   themeAttr,
 		Meta: metaTags{
 			Description: s.cfg.SiteTitle + " — a personal visual archive.",
 			URL:         s.absURL(r.URL.Path),
@@ -332,11 +337,21 @@ func itemDescription(it store.Item) string {
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	// Render fully into a buffer first, then write once with a Content-Length. This
+	// sends the page as one atomic body instead of a chunked/streamed one — buffered
+	// delivery does not trigger the Firefox theme flash, where a streamed document can
+	// paint a frame before the (server-declared) theme settles. It also means a
+	// template error can't emit a half-written 200.
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("render %s: %v", name, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache") // HTML is dynamic; always revalidate
-	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
-		log.Printf("render %s: %v", name, err)
-	}
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *Server) serverError(w http.ResponseWriter, err error) {

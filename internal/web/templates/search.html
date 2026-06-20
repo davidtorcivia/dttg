@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{if .ThemeAttr}} data-theme="{{.ThemeAttr}}"{{end}}>
 <head>
   <title>Search — {{.Cfg.SiteTitle}}</title>
   {{template "headtags" .}}

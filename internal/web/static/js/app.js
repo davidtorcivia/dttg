@@ -216,12 +216,12 @@
     var apply = function (theme, persist) {
       root.setAttribute('data-theme', theme);
       root.style.colorScheme = theme;
-      if (persist) {
-        try { localStorage.setItem('dnttg-theme', theme); } catch (e) {}
-        // mirror to a cookie so the server can render <meta name="color-scheme">
-        // from byte 0 and the next navigation never flashes (esp. Firefox).
-        try { document.cookie = 'dnttg-theme=' + theme + '; path=/; max-age=31536000; samesite=lax'; } catch (e) {}
-      }
+      // Always mirror the *resolved* theme to a cookie so the server can render
+      // <html data-theme> + <meta name=color-scheme> from byte 0 — even in auto/system
+      // mode. Without that, a slow (tunnel) navigation paints one light frame before
+      // JS sets the theme, which is the Firefox white flash.
+      try { document.cookie = 'dnttg-theme=' + theme + '; path=/; max-age=31536000; samesite=lax'; } catch (e) {}
+      if (persist) { try { localStorage.setItem('dnttg-theme', theme); } catch (e) {} }
     };
     window.__toggleTheme = function () {
       apply(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
