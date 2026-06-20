@@ -167,6 +167,26 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 }
 
+// handleSearchCards renders search results as board-card HTML (live results on
+// the /search page).
+func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if q == "" {
+		return
+	}
+	items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r))
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	for _, it := range items {
+		if err := s.tmpl.ExecuteTemplate(w, "card", s.view(it)); err != nil {
+			log.Printf("render card: %v", err)
+		}
+	}
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Limit: boardPage}
 	slug := r.PathValue("slug")

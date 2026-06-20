@@ -10,6 +10,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -44,6 +45,8 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 		"upper":     strings.ToUpper,
 		"filesize":  humanSize,
 		"fileext":   fileExt,
+		"host":      hostname,
+		"hasPrefix": strings.HasPrefix,
 		"safeHTML":  func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec // admin/oEmbed-trusted
 	}
 	tmpl, err := template.New("dnttg").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
@@ -85,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /item/{id}", s.handleDetail)
 	mux.HandleFunc("GET /item/{id}/og.jpg", s.handleOGImage)
 	mux.HandleFunc("GET /search", s.handleSearch)
+	mux.HandleFunc("GET /search/cards", s.handleSearchCards)
 	mux.HandleFunc("GET /api/search", s.handleAPISearch)
 	mux.HandleFunc("GET /api/stats", s.handleAPIStats)
 	mux.HandleFunc("GET /board/more", s.handleBoardMore)
@@ -155,4 +159,16 @@ func fileExt(name string) string {
 		return "FILE"
 	}
 	return e
+}
+
+// hostname returns the bare host (no www) of a URL, or "".
+func hostname(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(u.Host, "www.")
 }

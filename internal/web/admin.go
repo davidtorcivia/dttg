@@ -125,7 +125,7 @@ func (s *Server) handleAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	if c := strings.TrimSpace(r.FormValue("category")); c != "" {
 		catID, _ = s.store.GetOrCreateCategory(r.Context(), c)
 	}
-	if err := s.store.UpdateItem(r.Context(), id, r.FormValue("title"), r.FormValue("note"), catID, r.FormValue("visibility")); err != nil {
+	if err := s.store.UpdateItem(r.Context(), id, r.FormValue("title"), r.FormValue("note"), r.FormValue("source_url"), catID, r.FormValue("visibility")); err != nil {
 		s.serverError(w, err)
 		return
 	}

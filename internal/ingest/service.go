@@ -39,6 +39,7 @@ func New(st *store.Store, ms media.Store) *Service {
 type Input struct {
 	Kind       string // optional hint: image|link|text|embed|document ("" = auto)
 	URL        string
+	Source     string // canonical source link (e.g. the page/tweet an image is from); falls back to URL
 	FileBytes  []byte
 	FileName   string
 	Title      string
@@ -58,10 +59,14 @@ func (in Input) visibility() string {
 
 // Create archives the input and returns the new item id.
 func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
+	source := strings.TrimSpace(in.Source)
+	if source == "" {
+		source = strings.TrimSpace(in.URL)
+	}
 	it := store.Item{
 		Title:      strings.TrimSpace(in.Title),
 		Note:       strings.TrimSpace(in.Note),
-		SourceURL:  strings.TrimSpace(in.URL),
+		SourceURL:  source,
 		Visibility: in.visibility(),
 		CreatedAt:  in.CreatedAt,
 	}
@@ -70,6 +75,8 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 	var imageCT string
 	var docBytes []byte
 	var docCT, docName string
+	var videoBytes []byte
+	var videoCT, videoName string
 	kind := strings.TrimSpace(in.Kind)
 
 	switch {
@@ -112,6 +119,14 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 			case strings.HasPrefix(r.ContentType, "image/") || kind == "image":
 				kind = "image"
 				imageBytes, imageCT = r.Body, r.ContentType
+			case strings.HasPrefix(r.ContentType, "video/"):
+				if len(r.Body) > 0 && len(r.Body) < videoEmbedMax {
+					kind = "embed"
+					videoBytes, videoCT = r.Body, r.ContentType
+					videoName = fileNameFromURL(r.FinalURL)
+				} else {
+					kind = "link" // too large to embed inline; keep it as a link
+				}
 			case isDocumentCT(r.ContentType) || kind == "document":
 				kind = "document"
 				docBytes, docCT = r.Body, r.ContentType
@@ -199,6 +214,29 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		setIfEmpty(&it.Title, docName)
 		mediaRows = append(mediaRows,
 			store.Media{Variant: "file", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(docBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)},
+		)
+	}
+
+	// Store a small self-hosted video to embed inline.
+	if len(videoBytes) > 0 {
+		asset := randAsset()
+		ext := extForVideo(videoCT, videoName)
+		fileKey := fmt.Sprintf("items/%s/video%s", asset, ext)
+		ct := orDefault(videoCT, "application/octet-stream")
+		if err := s.media.Put(ctx, fileKey, ct, bytes.NewReader(videoBytes)); err != nil {
+			return 0, err
+		}
+		if videoName == "" {
+			videoName = "video" + ext
+		}
+		it.FileKey = fileKey
+		it.FileName = videoName
+		it.FileMime = ct
+		it.FileSize = int64(len(videoBytes))
+		it.EmbedProvider = "Video"
+		setIfEmpty(&it.Title, videoName)
+		mediaRows = append(mediaRows,
+			store.Media{Variant: "video", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(videoBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)},
 		)
 	}
 
@@ -312,6 +350,25 @@ func mimeByExt(name string) string {
 		return "application/epub+zip"
 	}
 	return ""
+}
+
+const videoEmbedMax = 20 << 20 // self-host + embed videos up to ~20 MB; larger ones stay links
+
+func extForVideo(ct, name string) string {
+	if e := strings.ToLower(filepath.Ext(name)); e != "" && len(e) <= 6 {
+		return e
+	}
+	switch ct {
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/ogg":
+		return ".ogv"
+	case "video/quicktime":
+		return ".mov"
+	}
+	return ".mp4"
 }
 
 func isDocumentCT(ct string) bool {

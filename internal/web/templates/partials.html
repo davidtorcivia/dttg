@@ -81,6 +81,12 @@
       <span class="doc-name">{{if .Title}}{{.Title}}{{else}}{{.FileName}}{{end}}</span>
       <span class="doc-size">{{filesize .FileSize}}</span>
     </div>
+    {{- else if eq .Kind "embed"}}
+    <div class="doc-tile video-tile">
+      <span class="doc-ext">&#9654;&#xfe0e; Video</span>
+      <span class="doc-name">{{if .Title}}{{.Title}}{{else}}{{.FileName}}{{end}}</span>
+      <span class="doc-size">{{filesize .FileSize}}</span>
+    </div>
     {{- else if eq .Kind "text"}}
     <div class="card-text">{{.Note}}</div>
     {{- else}}

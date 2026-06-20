@@ -18,21 +18,30 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   let payload = null;
   switch (info.menuItemId) {
     case "save-image":
-      payload = { kind: "image", url: info.srcUrl, title };
+      // only that image, but linked back to the page it's on (the tweet, etc.)
+      payload = { kind: "image", url: info.srcUrl, source: cleanSource(info.pageUrl || (tab && tab.url)), title };
       break;
     case "save-link":
-      payload = { url: info.linkUrl, title: info.linkText || title };
+      payload = { url: cleanSource(info.linkUrl), title: info.linkText || title };
       break;
     case "save-selection":
       // keep the source page as a link, with the highlighted text as the note
-      payload = { url: info.pageUrl || (tab && tab.url), note: info.selectionText, title };
+      payload = { url: cleanSource(info.pageUrl || (tab && tab.url)), note: info.selectionText, title };
       break;
     case "save-page":
-      payload = { url: info.pageUrl || (tab && tab.url), title };
+      payload = { url: cleanSource(info.pageUrl || (tab && tab.url)), title };
       break;
   }
   if (payload) await saveItem(payload);
 });
+
+// For x.com / twitter.com expanded-image (and other deep) URLs, link back to the
+// main tweet by dropping everything after /status/<id> (e.g. /photo/1).
+function cleanSource(url) {
+  if (!url) return url || "";
+  const m = url.match(/^(https?:\/\/(?:x|twitter)\.com\/[^/]+\/status\/\d+)/i);
+  return m ? m[1] : url;
+}
 
 async function saveItem(payload) {
   const cfg = await browser.storage.local.get(["baseUrl", "token"]);

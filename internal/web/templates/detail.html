@@ -13,7 +13,9 @@
   <div class="detail-container">
     <div class="image-wrapper">
       {{- with .Item}}
-      {{- if and (eq .Kind "embed") .EmbedHTML}}
+      {{- if and (eq .Kind "embed") (hasPrefix .FileMime "video/")}}
+      <video class="detail-video" controls preload="metadata" src="{{.FileURL}}"></video>
+      {{- else if and (eq .Kind "embed") .EmbedHTML}}
       <div class="embed-wrap">{{safeHTML .EmbedHTML}}</div>
       {{- else if .CoverURL}}
       <img src="{{.CoverURL}}" alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}">
@@ -50,7 +52,7 @@
         {{- end}}
         {{- if .Item.SourceURL}}
         <div class="info-label">Source</div>
-        <div class="info-value"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{if .Item.LinkSiteName}}{{.Item.LinkSiteName}}{{else}}Open &#8599;{{end}}</a></div>
+        <div class="info-value"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{$h := host .Item.SourceURL}}{{if $h}}{{$h}}{{else}}Open &#8599;{{end}}</a></div>
         {{- end}}
         {{- if .Item.Tags}}
         <div class="info-label">Tags</div>
@@ -64,7 +66,7 @@
       <div class="note-content">{{.Item.Note}}</div>
       {{- end}}
       {{- if .Item.LinkDescription}}
-      <div class="note-content">{{.Item.LinkDescription}}</div>
+      <blockquote class="quote">{{.Item.LinkDescription}}</blockquote>
       {{- end}}
 
       <nav class="detail-nav">

@@ -68,6 +68,7 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 		var body struct {
 			Kind       string   `json:"kind"`
 			URL        string   `json:"url"`
+			Source     string   `json:"source"`
 			Title      string   `json:"title"`
 			Note       string   `json:"note"`
 			Category   string   `json:"category"`
@@ -78,8 +79,9 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 			return ingest.Input{}, fmt.Errorf("invalid json: %w", err)
 		}
 		return ingest.Input{
-			Kind: body.Kind, URL: strings.TrimSpace(body.URL), Title: body.Title,
-			Note: body.Note, Category: body.Category, Visibility: body.Visibility, Tags: body.Tags,
+			Kind: body.Kind, URL: strings.TrimSpace(body.URL), Source: strings.TrimSpace(body.Source),
+			Title: body.Title, Note: body.Note, Category: body.Category,
+			Visibility: body.Visibility, Tags: body.Tags,
 		}, nil
 	}
 
@@ -94,6 +96,7 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 	in := ingest.Input{
 		Kind:       r.FormValue("kind"),
 		URL:        strings.TrimSpace(r.FormValue("url")),
+		Source:     strings.TrimSpace(r.FormValue("source")),
 		Title:      r.FormValue("title"),
 		Note:       r.FormValue("note"),
 		Category:   r.FormValue("category"),

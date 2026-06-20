@@ -82,6 +82,37 @@
     }
   })();
 
+  // ---- live results on the /search page ----
+  (function () {
+    var form = document.querySelector('.search-page-form');
+    var input = form && form.querySelector('input[name="q"]');
+    var grid = document.getElementById('grid');
+    var meta = document.querySelector('.search-meta');
+    if (!form || !input || !grid) return;
+    var revive = function () {
+      grid.querySelectorAll('.card').forEach(function (card) {
+        var img = card.querySelector('img[data-ph]');
+        if (img) { var c = img.parentElement; c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")'; c.style.backgroundSize = 'cover'; c.style.backgroundPosition = 'center'; }
+        var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
+        card.classList.add('visible');
+      });
+    };
+    var timer;
+    var run = function () {
+      var q = input.value.trim();
+      if (!q) { grid.innerHTML = ''; if (meta) meta.textContent = ''; return; }
+      fetch('/search/cards?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.text(); })
+        .then(function (html) {
+          grid.innerHTML = html;
+          revive();
+          var n = grid.querySelectorAll('.card').length;
+          if (meta) meta.textContent = n + ' result' + (n === 1 ? '' : 's') + ' for “' + q + '”';
+        }).catch(function () {});
+    };
+    input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 200); });
+  })();
+
   // ---- detail prev/next keyboard nav (arrow keys) ----
   (function () {
     var prev = document.getElementById('nav-prev');

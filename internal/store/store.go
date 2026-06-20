@@ -508,7 +508,7 @@ func (s *Store) CountItems(ctx context.Context, includePrivate bool) (int, error
 }
 
 // UpdateItem updates the editable fields of an item (admin edit).
-func (s *Store) UpdateItem(ctx context.Context, id int64, title, note string, categoryID int64, visibility string) error {
+func (s *Store) UpdateItem(ctx context.Context, id int64, title, note, sourceURL string, categoryID int64, visibility string) error {
 	if visibility != "private" {
 		visibility = "public"
 	}
@@ -518,10 +518,10 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, title, note string, ca
 	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE items
-		SET title=?, note=?, category_id=?, visibility=?, updated_at=unixepoch(),
+		SET title=?, note=?, source_url=?, category_id=?, visibility=?, updated_at=unixepoch(),
 		    published_at=CASE WHEN ?='public' AND published_at IS NULL THEN unixepoch() ELSE published_at END
 		WHERE id=?`,
-		strings.TrimSpace(title), strings.TrimSpace(note), cat, visibility, visibility, id)
+		strings.TrimSpace(title), strings.TrimSpace(note), strings.TrimSpace(sourceURL), cat, visibility, visibility, id)
 	return err
 }
 
