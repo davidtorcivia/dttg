@@ -1,5 +1,8 @@
 # DO NOT TOUCH THE GLASS
 
+[![ci](https://github.com/davidtorcivia/dttg/actions/workflows/ci.yml/badge.svg)](https://github.com/davidtorcivia/dttg/actions/workflows/ci.yml)
+[![docker](https://github.com/davidtorcivia/dttg/actions/workflows/docker.yml/badge.svg)](https://github.com/davidtorcivia/dttg/actions/workflows/docker.yml)
+
 A single-user, self-hosted visual archive — a personal, are.na-style board with an
 awwwards-leaning editorial design. Drop in images, links, text notes, and embeds
 from a Firefox extension or bookmarklet; tag them, file them in a category, mark
@@ -28,10 +31,12 @@ Milestone roadmap:
    Android share target; multi-stage Dockerfile (static binary → distroless),
    compose, `/share` endpoint.
 
-**Also shipped:** search (header magnifier + `/search`), **PDF/document** uploads
-(board tiles + in-browser viewer), embedded video on detail pages, self-hosted
-Inter + server-side weather, an admin **settings** page with an injectable
-analytics snippet, on-page **edit/delete** for admins, and rolling **R2 DB backups**.
+**Also shipped:** search (magnifier + live `/search`), **PDF/document** uploads
+(board tiles + in-browser viewer), embedded video, generated **OG share cards**,
+**dark mode**, lightbox, View Transitions, full-keyboard navigation, related items,
+**JSON/RSS feeds**, infinite scroll, an admin **settings** page with an injectable
+analytics snippet, on-page **edit/delete**, rolling **R2 DB backups** — and a few
+easter eggs.
 
 ## Quick start (local dev)
 
@@ -78,19 +83,22 @@ curl -X POST https://<site>/api/items \
 
 ## Deploy
 
-Single static binary; templates, static assets, and migrations are all embedded.
+CI builds + vets on every push; a **multi-arch image** (amd64 + arm64) is published
+to **`ghcr.io/davidtorcivia/dttg`** on each push to `main` (see `.github/workflows/`).
+Everything — templates, static assets, migrations — is embedded in one static binary.
 
 ```sh
 cp .env.example .env            # fill in domains + R2 creds
-docker compose build
+docker compose build            # …or: docker pull ghcr.io/davidtorcivia/dttg:latest
 docker compose run --rm dnttg set-password "your-password"
 docker compose run --rm dnttg token firefox     # paste into the extension
 docker compose up -d            # serves on :8080; data persists in the dnttg-data volume
 ```
 
-Put it behind a Cloudflare tunnel and bind the R2 custom domain for media.
-Deployment specifics (hostnames, R2 creds, tunnel) are intentionally kept in an
-untracked `DEPLOY.local.md`, not this repo.
+Put it behind a Cloudflare tunnel and bind the R2 custom domain for media. The full
+server-side runbook (real hostnames, R2 token, custom domain, tunnel, verify
+checklist) lives in an untracked **`GOLIVE.local.md`** handed to the deploy agent —
+not in this repo.
 
 **PWA / Android:** open the site in the browser → *Add to Home Screen*. It then
 appears in the Android **share sheet**, so you can share an image or link straight
@@ -104,7 +112,7 @@ local `/media` path — so the same DB works with or without R2.
 
 > **Deployment / infrastructure specifics** (real domains, R2 bucket + custom
 > domain, Cloudflare tunnel, server env, secrets) are intentionally **not** in
-> this repo. They live in an untracked `DEPLOY.local.md` handed to the server-side
+> this repo. They live in an untracked `GOLIVE.local.md` handed to the server-side
 > agent. This repo is a clean, generic template; nothing here exposes secrets.
 
 ## Layout

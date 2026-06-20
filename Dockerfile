@@ -1,10 +1,14 @@
-# --- build (pure-Go, no cgo => static binary) ---
-FROM golang:1.25 AS build
+# syntax=docker/dockerfile:1
+
+# --- build (pure-Go, no cgo => static binary; cross-compiled to the target arch) ---
+FROM --platform=$BUILDPLATFORM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/dnttg ./cmd/dnttg
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/dnttg ./cmd/dnttg
 
 # --- runtime (distroless; templates/static/migrations are embedded in the binary) ---
 FROM gcr.io/distroless/static-debian12

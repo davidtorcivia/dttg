@@ -1,6 +1,6 @@
 # Generic, commit-safe compose. Real values live in .env (see .env.example),
 # which is git-ignored. Cloudflare tunnel is configured separately on the host
-# (see DEPLOY.local.md) — not started from here.
+# (see GOLIVE.local.md) — not started from here.
 services:
   dnttg:
     build: .
