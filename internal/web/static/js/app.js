@@ -329,6 +329,44 @@
     io.observe(rel);
   })();
 
+  // ---- translate text blocks in place ----
+  (function () {
+    var blocks = document.querySelectorAll('.quote, .note-content, .detail-text');
+    if (!blocks.length) return;
+    var target = (navigator.language || 'en').slice(0, 2);
+    blocks.forEach(function (block) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'translate-btn';
+      btn.textContent = 'Translate';
+      block.insertAdjacentElement('afterend', btn);
+      var orig = null, trans = null, showing = 'orig';
+      btn.addEventListener('click', function () {
+        if (trans != null) {
+          if (showing === 'orig') { block.textContent = trans; showing = 'trans'; btn.textContent = 'Show original'; }
+          else { block.textContent = orig; showing = 'orig'; btn.textContent = 'Show translation'; }
+          return;
+        }
+        orig = block.textContent;
+        btn.disabled = true; btn.textContent = 'Translating…';
+        fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: orig, target: target })
+        }).then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+          .then(function (d) {
+            trans = d.text || orig;
+            block.textContent = trans; showing = 'trans';
+            btn.disabled = false; btn.textContent = 'Show original';
+          })
+          .catch(function () {
+            btn.disabled = false; btn.textContent = 'Translate failed';
+            setTimeout(function () { btn.textContent = 'Translate'; }, 2200);
+          });
+      });
+    });
+  })();
+
   // ===== easter eggs =====
 
   // console colophon

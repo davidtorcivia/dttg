@@ -91,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /search/cards", s.handleSearchCards)
 	mux.HandleFunc("GET /api/search", s.handleAPISearch)
 	mux.HandleFunc("GET /api/stats", s.handleAPIStats)
+	mux.HandleFunc("POST /api/translate", s.handleTranslate)
 	mux.HandleFunc("GET /board/more", s.handleBoardMore)
 	mux.HandleFunc("GET /feed.json", s.handleFeedJSON)
 	mux.HandleFunc("GET /feed.xml", s.handleFeedRSS)

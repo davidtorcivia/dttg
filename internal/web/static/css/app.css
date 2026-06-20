@@ -54,6 +54,9 @@ input, textarea, select { color:var(--text); }
 .quote { font-size:1.15rem; line-height:1.7; font-weight:300; font-style:italic; color:var(--muted); margin:1.75rem 0 0; padding-left:1.4rem; border-left:2px solid var(--line); }
 .quote::before { content:"\201C"; color:var(--faint); }
 .quote::after { content:"\201D"; color:var(--faint); }
+.translate-btn { display:block; margin-top:.7rem; background:none; border:none; padding:0; font:inherit; font-size:.6rem; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); cursor:pointer; transition:color .3s; }
+.translate-btn:hover { color:var(--text); }
+.translate-btn[disabled] { opacity:.55; cursor:default; }
 .detail-nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:2.5rem 0 0; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
 .detail-nav .dn-link { text-decoration:none; color:var(--text); transition:opacity .3s; }
 .detail-nav .dn-link:hover { opacity:.5; }
