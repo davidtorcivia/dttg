@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	// PWA (root scope) — installability + Android share target
 	mux.HandleFunc("GET /manifest.webmanifest", s.serveEmbedded("manifest.webmanifest", "application/manifest+json"))
 	mux.HandleFunc("GET /sw.js", s.serveEmbedded("sw.js", "application/javascript"))
+	mux.HandleFunc("GET /offline.html", s.serveEmbedded("offline.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /favicon.svg", s.serveEmbedded("favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/favicon.svg", http.StatusMovedPermanently)

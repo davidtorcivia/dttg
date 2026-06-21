@@ -134,14 +134,27 @@
     });
   })();
 
-  // ---- custom blend-mode cursor (fine pointers only) ----
+  // ---- custom blend-mode cursor + specular glass light (fine pointers only) ----
   if (window.matchMedia('(pointer: fine)').matches) {
     var cursor = document.createElement('div');
     cursor.className = 'cursor';
     document.body.appendChild(cursor);
+    // a soft highlight that tracks the pointer like reflection across glass
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var glow = null;
+    if (!reduceMotion) {
+      glow = document.createElement('div');
+      glow.className = 'glass-light';
+      glow.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(glow);
+    }
     document.addEventListener('mousemove', function (e) {
       cursor.style.left = e.clientX + 'px';
       cursor.style.top = e.clientY + 'px';
+      if (glow) {
+        glow.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)';
+        if (!glow.classList.contains('on')) glow.classList.add('on');
+      }
     });
     document.body.addEventListener('mouseover', function (e) {
       var hot = e.target.closest('a, button, img, .card');
@@ -246,10 +259,19 @@
         card.classList.add('visible');
       });
     };
+    var skeleton = function () {
+      grid.className = 'grid';
+      grid.textContent = '';
+      var sheet = document.createElement('div');
+      sheet.className = 'sheet';
+      for (var i = 0; i < 8; i++) sheet.appendChild(document.createElement('span'));
+      grid.appendChild(sheet);
+    };
     var timer;
     var run = function () {
       var q = input.value.trim();
-      if (!q) { grid.innerHTML = ''; if (meta) meta.textContent = ''; return; }
+      if (!q) { grid.className = 'grid'; grid.textContent = ''; if (meta) meta.textContent = ''; return; }
+      skeleton(); // contact-sheet shimmer while fetching
       fetch('/search/cards?q=' + encodeURIComponent(q))
         .then(function (r) { return r.text(); })
         .then(function (html) {
@@ -538,9 +560,17 @@
       lbLast = document.activeElement;
       img.src = z.getAttribute('data-full') || z.src;
       img.alt = z.getAttribute('alt') || '';
-      reset(false);
+      // rise off the plane: start low + small, then settle to rest
+      scale = 1; tx = 0; ty = 0;
+      img.classList.remove('lb-zoomed');
+      img.style.transition = 'none';
+      img.style.transform = 'translateY(22px) scale(.93)';
       box.classList.add('open');
       box.focus();
+      requestAnimationFrame(function () {
+        img.style.transition = 'transform .55s var(--ease-out)';
+        img.style.transform = 'translate(0px,0px) scale(1)';
+      });
       lbUntrap = trapFocus(box);
     };
     var close = function () {
@@ -729,8 +759,16 @@
     var offset = parseInt(sentinel.dataset.offset || '0', 10);
     var cat = sentinel.dataset.cat || '', tag = sentinel.dataset.tag || '';
     var done = offset < page, loading = false;
+    var markEnd = function () {
+      if (done && grid.querySelector('.card') && !document.querySelector('.board-end')) {
+        var end = document.createElement('div');
+        end.className = 'board-end';
+        end.textContent = 'end of the archive';
+        sentinel.parentNode.insertBefore(end, sentinel.nextSibling);
+      }
+    };
     var load = function () {
-      if (loading || done) return;
+      if (loading || done) { markEnd(); return; }
       loading = true;
       var q = '/board/more?offset=' + offset + (cat ? '&cat=' + encodeURIComponent(cat) : '') + (tag ? '&tag=' + encodeURIComponent(tag) : '');
       fetch(q).then(function (r) { return r.text(); }).then(function (html) {
@@ -745,13 +783,50 @@
           masonryAppend(grid, card);
         });
         offset += added.length;
-        if (added.length < page) done = true;
+        if (added.length < page) { done = true; markEnd(); }
         loading = false;
       }).catch(function () { loading = false; });
     };
     // Load the next batch well ahead (~1.5k px) so cards exist before the eager
     // image observer reaches for them — keeps thumbnails from popping in on scroll.
     new IntersectionObserver(function (en) { en.forEach(function (x) { if (x.isIntersecting) load(); }); }, { rootMargin: '1500px' }).observe(sentinel);
+  })();
+
+  // ---- intent prefetch: warm same-origin detail pages on hover/focus/touch ----
+  (function () {
+    var seen = {};
+    var prefetch = function (url) {
+      if (!url || url.charAt(0) !== '/' || seen[url]) return;
+      seen[url] = 1;
+      var l = document.createElement('link');
+      l.rel = 'prefetch';
+      l.as = 'document';
+      l.href = url;
+      document.head.appendChild(l);
+    };
+    var onIntent = function (e) {
+      var a = e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]');
+      if (a) prefetch(a.getAttribute('href'));
+    };
+    document.addEventListener('mouseover', onIntent, { passive: true });
+    document.addEventListener('focusin', onIntent);
+    document.addEventListener('touchstart', onIntent, { passive: true });
+  })();
+
+  // ---- top scroll-progress hairline (CSS drives it where scroll-timeline exists) ----
+  (function () {
+    var bar = document.createElement('div');
+    bar.className = 'scroll-progress';
+    bar.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(bar);
+    if (window.CSS && CSS.supports && CSS.supports('animation-timeline: scroll()')) return;
+    var update = function () {
+      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+      bar.style.transform = 'scaleX(' + (max > 0 ? h.scrollTop / max : 0) + ')';
+    };
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    update();
   })();
 
   // ---- colophon reveal (past the end) ----

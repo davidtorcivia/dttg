@@ -3,13 +3,48 @@
 @font-face { font-family:'Outfit'; font-style:normal; font-weight:400; font-display:swap; src:url('/static/fonts/outfit-latin-400-normal.woff2') format('woff2'); }
 @font-face { font-family:'Outfit'; font-style:normal; font-weight:500; font-display:swap; src:url('/static/fonts/outfit-latin-500-normal.woff2') format('woff2'); }
 
-:root { --bg:#ffffff; --text:#111; --line:#e5e5e5; --muted:#666; --faint:#aaa; color-scheme:light; }
+:root {
+  /* warm ink on warm paper — "off-white is not white" */
+  --bg:#f5f3ec; --text:#1a1714; --line:#e0dbd0; --muted:#6e675c; --faint:#b0a99c;
+  --paper-tint:#efece2;        /* faintly deeper paper for wells */
+  --display:'Didot','Bodoni 72','Hoefler Text','Playfair Display',Georgia,'Times New Roman',serif;
+  /* motion language */
+  --ease-glass:cubic-bezier(.2,.8,.2,1);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-spring:cubic-bezier(.34,1.56,.64,1);
+  --dur-1:.3s; --dur-2:.6s; --dur-3:.9s;
+  color-scheme:light;
+}
 * { box-sizing:border-box; margin:0; padding:0; }
 html { -webkit-text-size-adjust:100%; background:var(--bg); }
 body { background:var(--bg); color:var(--text); font-family:'Outfit',sans-serif; padding:4rem; overflow-x:hidden; }
 a { color:inherit; }
 input, textarea, select { color:var(--text); }
 ::placeholder { color:var(--faint); opacity:1; }
+
+/* ---------- the glass: grain, depth, specular light ---------- */
+/* film grain over everything — multiplies into the paper (light) / screens on ink (dark) */
+body::after {
+  content:""; position:fixed; inset:0; z-index:60; pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:190px 190px; opacity:.035; mix-blend-mode:multiply;
+}
+:root[data-theme="dark"] body::after { opacity:.05; mix-blend-mode:screen; }
+/* soft vignette — gives the glass thickness/depth */
+body::before {
+  content:""; position:fixed; inset:0; z-index:50; pointer-events:none;
+  background:radial-gradient(125% 125% at 50% 38%, transparent 58%, rgba(0,0,0,.055) 100%);
+}
+:root[data-theme="dark"] body::before { background:radial-gradient(125% 125% at 50% 38%, transparent 52%, rgba(0,0,0,.4) 100%); }
+/* specular highlight that tracks the pointer (positioned by JS) */
+.glass-light {
+  position:fixed; top:0; left:0; width:620px; height:620px; margin:-310px 0 0 -310px;
+  z-index:40; pointer-events:none; border-radius:50%;
+  background:radial-gradient(circle, rgba(255,255,255,.07), transparent 70%);
+  mix-blend-mode:soft-light; opacity:0; transition:opacity var(--dur-2) ease; will-change:transform;
+}
+.glass-light.on { opacity:1; }
+:root[data-theme="dark"] .glass-light { background:radial-gradient(circle, rgba(255,247,232,.10), transparent 70%); mix-blend-mode:screen; }
 
 /* ---------- accessibility ---------- */
 .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
@@ -286,7 +321,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 
 /* ---------- dark mode ---------- */
 html, body { transition:background-color .4s ease, color .4s ease; }
-:root[data-theme="dark"] { color-scheme:dark; --bg:#0d0d0d; --text:#ededed; --line:#262626; --muted:#9a9a9a; --faint:#5f5f5f; }
+:root[data-theme="dark"] { color-scheme:dark; --bg:#13110d; --text:#e9e4da; --line:#2a261f; --muted:#9c9488; --faint:#5f584d; --paper-tint:#1a1712; }
 :root[data-theme="dark"] .card-img-container img,
 :root[data-theme="dark"] .image-wrapper img,
 :root[data-theme="dark"] .related-item img { filter:contrast(1.04) brightness(.9); }
@@ -308,10 +343,12 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 
 /* ---------- lightbox ---------- */
 .zoomable { cursor:zoom-in; }
-.lightbox { position:fixed; inset:0; z-index:11000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.92); padding:3vw; opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; overflow:hidden; }
+/* "lift the glass": the board behind recedes (blur + desaturate) under a warm scrim
+   and the image floats above it with a deep contact shadow + hairline frame. */
+.lightbox { position:fixed; inset:0; z-index:11000; display:flex; align-items:center; justify-content:center; background:rgba(14,11,8,.5); -webkit-backdrop-filter:blur(24px) saturate(.7) brightness(.85); backdrop-filter:blur(24px) saturate(.7) brightness(.85); padding:4vw; opacity:0; visibility:hidden; transition:opacity var(--dur-1) ease, visibility var(--dur-1) ease; overflow:hidden; }
 .lightbox.open { opacity:1; visibility:visible; }
-/* transform is driven by JS (zoom/pan); origin stays center so scaling grows from the middle */
-.lightbox img { max-width:100%; max-height:100%; object-fit:contain; touch-action:none; cursor:zoom-in; will-change:transform; }
+/* transform is driven by JS (zoom/pan + the rise-in entrance); origin stays center */
+.lightbox img { max-width:100%; max-height:100%; object-fit:contain; touch-action:none; cursor:zoom-in; will-change:transform; box-shadow:0 40px 120px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.08); }
 .lightbox img.lb-zoomed { cursor:grab; }
 @media (pointer:fine) { .lightbox { cursor:zoom-out; } }
 
@@ -403,3 +440,65 @@ body.flash-invert { animation:flashInvert .55s ease; }
   .detail-container { display:block; }
   .info-wrapper { border:none; padding:0; position:static; max-width:none; }
 }
+
+/* ====================================================================
+   EXQUISITE LAYER — display type, editorial spread, scroll motion, states
+   ==================================================================== */
+
+/* ---------- display face + optical refinements ---------- */
+.media-title-v, .quote, .col-mark, .related h3, .doc-panel-name,
+.search-form input, .search-page-form input { font-family:var(--display); }
+.quote { font-style:italic; }
+/* tabular figures wherever numbers line up */
+#sys-clock, .meta-info, .info-grid, .detail-nav, .col-line, .search-meta { font-variant-numeric:tabular-nums; }
+/* tighter reading: balanced headings, no widows/orphans, hanging punctuation */
+.col-mark, .doc-panel-name { text-wrap:balance; }
+.note-content, .detail-text, .quote, .detail-text + *, .card-text { text-wrap:pretty; }
+.note-content, .detail-text, .quote { hanging-punctuation:first last; }
+
+/* ---------- editorial detail spread ---------- */
+/* drop cap on long-form text, set in the display face for grotesque/serif tension */
+.detail-text::first-letter, .note-content::first-letter {
+  font-family:var(--display); font-weight:500; font-size:3.3em; line-height:.78;
+  float:left; margin:.04em .14em -.02em 0; color:var(--text);
+}
+.media-title-v { color:var(--muted); letter-spacing:.16em; }
+
+/* ---------- card: a faint specular sheen sweeps the thumb on hover ---------- */
+.card-img-container:has(img) { overflow:hidden; }
+.card-img-container::after {
+  content:""; position:absolute; inset:0; pointer-events:none; opacity:0;
+  background:linear-gradient(105deg, transparent 30%, rgba(255,255,255,.18) 50%, transparent 70%);
+  transform:translateX(-60%); transition:opacity var(--dur-1) ease;
+}
+@media (pointer:fine) {
+  .card:hover .card-img-container::after { opacity:1; animation:sheen 1.1s var(--ease-out); }
+}
+@keyframes sheen { from { transform:translateX(-60%); } to { transform:translateX(60%); } }
+
+/* ---------- scroll-driven thumbnail parallax (progressive enhancement) ---------- */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) and (pointer:fine) {
+    .card-img-container img { animation:thumbParallax linear both; animation-timeline:view(); animation-range:cover; }
+    @keyframes thumbParallax {
+      from { transform:translateY(-3.2%) scale(1.06); }
+      to   { transform:translateY(3.2%)  scale(1.06); }
+    }
+  }
+}
+
+/* ---------- top scroll-progress hairline ---------- */
+.scroll-progress { position:fixed; top:0; left:0; height:2px; width:100%; transform-origin:0 50%; transform:scaleX(0); background:var(--text); opacity:.5; z-index:9000; pointer-events:none; }
+@supports (animation-timeline: scroll()) {
+  .scroll-progress { animation:progressGrow linear both; animation-timeline:scroll(root); }
+  @keyframes progressGrow { from { transform:scaleX(0); } to { transform:scaleX(1); } }
+}
+
+/* ---------- designed states: empty / loading / end-of-feed ---------- */
+.empty { color:var(--faint); text-transform:uppercase; letter-spacing:.2em; font-size:.72rem; padding:6rem 0; text-align:center; }
+/* contact-sheet skeleton shown while a batch loads */
+.sheet { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:2rem; margin-top:1rem; }
+.sheet span { display:block; aspect-ratio:3/4; background:linear-gradient(100deg, var(--paper-tint) 30%, var(--line) 50%, var(--paper-tint) 70%); background-size:200% 100%; animation:shimmer 1.4s linear infinite; }
+@keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+.board-end { text-align:center; padding:5rem 0 2rem; font-size:.62rem; text-transform:uppercase; letter-spacing:.35em; color:var(--faint); }
+.board-end::before { content:""; display:block; width:1px; height:3rem; margin:0 auto 1.5rem; background:var(--line); }

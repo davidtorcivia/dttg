@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offline — the glass is dark</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #13110d; color: #e9e4da;
+    font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 2rem; overflow: hidden;
+  }
+  /* faint vignette + grain so even the offline page feels like glass */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(125% 125% at 50% 38%, transparent 50%, rgba(0,0,0,.5) 100%);
+  }
+  .wrap { position: relative; max-width: 30rem; }
+  .mark { font-size: .62rem; letter-spacing: .35em; text-transform: uppercase; color: #5f584d; margin-bottom: 2.5rem; }
+  h1 {
+    font-family: 'Didot','Bodoni 72','Hoefler Text',Georgia,serif;
+    font-weight: 400; font-size: clamp(2rem, 6vw, 3.2rem); line-height: 1.1; letter-spacing: .01em;
+  }
+  p { margin-top: 1.5rem; color: #9c9488; font-size: .85rem; line-height: 1.7; }
+  .hair { width: 1px; height: 3rem; background: #2a261f; margin: 2.5rem auto 0; }
+  a { color: #e9e4da; text-decoration: none; border-bottom: 1px solid #2a261f; font-size: .7rem; text-transform: uppercase; letter-spacing: .15em; padding-bottom: .2rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark">Do not touch the glass</div>
+    <h1>The glass is dark.</h1>
+    <p>You're offline. The archive is held behind glass — it will return when the connection does.</p>
+    <div class="hair"></div>
+    <p><a href="/">Try again</a></p>
+  </div>
+</body>
+</html>
