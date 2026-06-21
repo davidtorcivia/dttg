@@ -83,6 +83,22 @@
     }
     img.addEventListener('load', clear);
   }
+  // Eager-ahead loading: the browser's native loading=lazy threshold is tight
+  // enough that thumbnails visibly pop in while scrolling. This observer forces a
+  // lazy thumb to start fetching ~2 viewports before it enters view, so it's
+  // already decoded by the time the card scrolls in.
+  var eagerIO = ('IntersectionObserver' in window) ? new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      e.target.loading = 'eager'; // kicks the fetch in modern browsers
+      eagerIO.unobserve(e.target);
+    });
+  }, { rootMargin: '0px 0px 200% 0px' }) : null;
+  function observeEager(img) {
+    if (eagerIO && img && img.getAttribute('loading') === 'lazy' && !(img.complete && img.naturalWidth)) {
+      eagerIO.observe(img);
+    }
+  }
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
@@ -191,7 +207,7 @@
     var revive = function () {
       grid.querySelectorAll('.card').forEach(function (card) {
         var img = card.querySelector('.card-img-container img');
-        if (img) blurUp(img);
+        if (img) { blurUp(img); observeEager(img); }
         var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
         card.classList.add('visible');
       });
@@ -351,7 +367,7 @@
   });
 
   // ---- blur-up placeholders (tiny base64 image scaled to cover) ----
-  document.querySelectorAll('.card-img-container img').forEach(blurUp);
+  document.querySelectorAll('.card-img-container img').forEach(function (img) { blurUp(img); observeEager(img); });
 
   // ---- staggered card entrance ----
   var cards = document.querySelectorAll('.card');
@@ -658,7 +674,7 @@
         var added = tmp.querySelectorAll('.card');
         added.forEach(function (card) {
           var img = card.querySelector('.card-img-container img');
-          if (img) blurUp(img);
+          if (img) { blurUp(img); observeEager(img); }
           var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
           card.classList.add('visible');
           masonryAppend(grid, card);
@@ -668,7 +684,9 @@
         loading = false;
       }).catch(function () { loading = false; });
     };
-    new IntersectionObserver(function (en) { en.forEach(function (x) { if (x.isIntersecting) load(); }); }, { rootMargin: '700px' }).observe(sentinel);
+    // Load the next batch well ahead (~1.5k px) so cards exist before the eager
+    // image observer reaches for them — keeps thumbnails from popping in on scroll.
+    new IntersectionObserver(function (en) { en.forEach(function (x) { if (x.isIntersecting) load(); }); }, { rootMargin: '1500px' }).observe(sentinel);
   })();
 
   // ---- colophon reveal (past the end) ----
