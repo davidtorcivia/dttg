@@ -154,8 +154,10 @@
   if (window.matchMedia('(pointer: fine)').matches) {
     var SIZE = 190, ZOOM = 2.2, loupe = null, blendCursor = null;
     document.addEventListener('mousemove', function (e) {
-      var img = e.target.closest ? e.target.closest('img.zoomable') : null;
-      if (!img || !img.complete || !img.naturalWidth) {
+      // detail cover (.zoomable) and the open lightbox image — but not once the
+      // lightbox is click-zoomed, where drag-pan takes over instead.
+      var img = e.target.closest ? e.target.closest('img.zoomable, #lightbox-img') : null;
+      if (!img || !img.complete || !img.naturalWidth || img.classList.contains('lb-zoomed')) {
         if (loupe) loupe.classList.remove('on');
         if (blendCursor) blendCursor.style.opacity = '';
         return;
