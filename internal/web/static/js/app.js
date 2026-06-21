@@ -13,15 +13,13 @@
   // down (newest three in the top row, etc.). Cards are distributed round-robin
   // into N flex columns; each column still packs to its own content height, so it
   // stays a masonry without the column-major fill order of CSS `column-count`.
-  // Step the column count down on narrower screens, capped at the configured max.
-  // A 4-column board therefore collapses to 3 / 2 / 1 as the viewport shrinks
-  // (instead of cramming all 4 in until 1000px), and a 3-column board behaves as
-  // before. Each tier targets a comfortable ~300px+ per column.
+  // Phones get a single column and small/narrow windows two; desktop honours the
+  // configured 3 or 4 (the masonry order stays chronological via grid.__order, so
+  // collapsing to fewer columns doesn't scramble it).
   function gridColumnCount(maxCols) {
     var w = window.innerWidth;
     if (w <= 600) return 1;
-    if (w <= 1000) return Math.min(2, maxCols);
-    if (w <= 1400) return Math.min(3, maxCols);
+    if (w <= 1000) return 2;
     return maxCols;
   }
   function gridMaxCols(grid) {
