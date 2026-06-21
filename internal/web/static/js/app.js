@@ -23,29 +23,43 @@
     var v = parseInt(grid.style.getPropertyValue('--cols'), 10);
     return (v === 3 || v === 4) ? v : 3;
   }
+  function shortestCol(heights) {
+    var m = 0;
+    for (var j = 1; j < heights.length; j++) if (heights[j] < heights[m]) m = j;
+    return m;
+  }
   function layoutMasonry(grid, force) {
     var n = gridColumnCount(gridMaxCols(grid));
     if (!force && grid.__n === n) return; // column count unchanged; nothing to do
     var cards = Array.prototype.slice.call(grid.querySelectorAll('.card'));
-    var frag = document.createDocumentFragment();
-    var cols = [];
+    grid.textContent = '';
+    var cols = [], heights = [];
     for (var i = 0; i < n; i++) {
       var c = document.createElement('div');
       c.className = 'grid-col';
+      grid.appendChild(c);
       cols.push(c);
-      frag.appendChild(c);
+      heights.push(0);
     }
-    cards.forEach(function (card, i) { cols[i % n].appendChild(card); });
-    grid.textContent = '';
-    grid.appendChild(frag);
+    // Walk cards newest-first and drop each into the currently shortest column.
+    // Image heights are reserved via width/height attributes, so the measured
+    // column height is accurate even before the images finish loading.
+    cards.forEach(function (card) {
+      var m = shortestCol(heights);
+      cols[m].appendChild(card);
+      heights[m] = cols[m].offsetHeight;
+    });
     grid.__cols = cols;
+    grid.__heights = heights;
     grid.__n = n;
   }
-  // Append one card, continuing the round-robin from the current card count.
+  // Append one card into the currently shortest column (infinite scroll).
   function masonryAppend(grid, card) {
-    var cols = grid.__cols;
+    var cols = grid.__cols, heights = grid.__heights;
     if (!cols || !cols.length) { grid.appendChild(card); return; }
-    cols[grid.querySelectorAll('.card').length % cols.length].appendChild(card);
+    var m = shortestCol(heights);
+    cols[m].appendChild(card);
+    heights[m] = cols[m].offsetHeight;
   }
   (function () {
     var grid = document.getElementById('grid');
@@ -326,21 +340,57 @@
     });
     box.addEventListener('click', function (e) { if (e.target === box) box.classList.remove('open'); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') box.classList.remove('open'); });
+  })();
 
-    // "Expand full size" — shown only when the detail image is displayed smaller
-    // than its source (i.e. there's more detail to see); opens the lightbox.
-    var dimg = document.querySelector('.image-wrapper img.zoomable');
+  // ---- detail media: fit to viewport + "expand full size" ----
+  (function () {
+    var media = document.querySelector('.image-wrapper > img.zoomable, .image-wrapper > video.detail-video');
+    if (!media) return;
+    var wrap = media.closest('.image-wrapper');
     var btn = document.getElementById('expand-full');
-    if (dimg && btn) {
-      var sync = function () {
-        var bigger = dimg.naturalWidth > dimg.clientWidth + 4 || dimg.naturalHeight > dimg.clientHeight + 4;
-        btn.hidden = !(dimg.clientWidth && bigger);
-      };
-      if (dimg.complete && dimg.naturalWidth) sync(); else dimg.addEventListener('load', sync);
-      window.addEventListener('resize', sync);
+    var expanded = false;
+
+    // Cap the media's height so it + the caption/expand link fit on screen without
+    // scrolling. Measured against the live layout, so it's exact regardless of the
+    // header/chrome height.
+    var fit = function () {
+      if (expanded) { media.style.maxHeight = ''; return; }
+      media.style.maxHeight = '';                       // reset before measuring
+      var below = 0;
+      for (var s = media.nextElementSibling; s; s = s.nextElementSibling) {
+        var cs = getComputedStyle(s);
+        if (cs.display === 'none') continue;
+        below += s.offsetHeight + parseFloat(cs.marginTop || 0) + parseFloat(cs.marginBottom || 0);
+      }
+      var docTop = media.getBoundingClientRect().top + window.scrollY; // fixed chrome height above the media
+      var avail = window.innerHeight - docTop - below - 16;
+      if (avail > 160) media.style.maxHeight = avail + 'px';
+    };
+
+    // Show "expand full size" only when the source is larger than what's shown.
+    var syncBtn = function () {
+      if (!btn) return;
+      if (expanded) { btn.hidden = false; return; }
+      var bigger = media.naturalWidth > media.clientWidth + 4 || media.naturalHeight > media.clientHeight + 4;
+      btn.hidden = !(media.clientWidth && bigger);
+    };
+
+    var refresh = function () { fit(); syncBtn(); fit(); }; // 2nd pass accounts for the button's height
+
+    if (media.tagName === 'IMG' && !(media.complete && media.naturalWidth)) {
+      media.addEventListener('load', refresh);
+    }
+    if (media.tagName === 'VIDEO') media.addEventListener('loadedmetadata', refresh);
+    refresh();
+    window.addEventListener('resize', refresh);
+
+    if (btn) {
       btn.addEventListener('click', function () {
-        img.src = dimg.getAttribute('data-full') || dimg.src;
-        box.classList.add('open');
+        expanded = !expanded;
+        media.classList.toggle('expanded', expanded);   // full natural size on the page
+        wrap.classList.toggle('is-expanded', expanded);
+        btn.textContent = expanded ? '[ Fit to screen ]' : '[ Expand full size ]';
+        if (expanded) { media.style.maxHeight = ''; window.scrollTo({ top: 0 }); } else refresh();
       });
     }
   })();

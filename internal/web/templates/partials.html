@@ -80,7 +80,7 @@
 <a href="{{.DetailURL}}" class="card">
   <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
     {{- if .ThumbURL}}
-    <img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy" data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
+    <img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}} data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
     {{- else if eq .Kind "document"}}
     <div class="doc-tile">
       <span class="doc-ext">{{fileext .FileName}}</span>

@@ -19,7 +19,7 @@
       <div class="embed-wrap">{{safeHTML .EmbedHTML}}</div>
       {{- else if .CoverURL}}
       <img src="{{.CoverURL}}" alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}">
-      <button type="button" class="expand-full" id="expand-full" hidden>&#11036; Expand full size</button>
+      <button type="button" class="expand-full" id="expand-full" hidden>[ Expand full size ]</button>
       {{- else if eq .Kind "document"}}
         {{- if eq .FileMime "application/pdf"}}
       <iframe class="pdf-frame" src="{{.FileURL}}#view=FitH" title="{{.FileName}}"></iframe>
@@ -36,6 +36,7 @@
       <div class="detail-text">{{.Note}}</div>
       {{- end}}
       {{- end}}
+      {{- if .Item.Title}}<div class="item-caption">{{.Item.Title}}</div>{{- end}}
     </div>
 
     <div class="info-wrapper">
@@ -71,9 +72,9 @@
       {{- end}}
 
       <nav class="detail-nav">
-        {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev">&larr; Previous</a>{{else}}<span class="dn-link dn-disabled">&larr; Previous</span>{{end}}
+        {{if .PrevURL}}<a class="dn-link" href="{{.PrevURL}}" id="nav-prev" rel="prev"><span class="dn-arrow">&larr;</span> Previous</a>{{else}}<span class="dn-link dn-disabled"><span class="dn-arrow">&larr;</span> Previous</span>{{end}}
         <a class="dn-index" href="/">Index</a>
-        {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next &rarr;</a>{{else}}<span class="dn-link dn-disabled">Next &rarr;</span>{{end}}
+        {{if .NextURL}}<a class="dn-link" href="{{.NextURL}}" id="nav-next" rel="next">Next <span class="dn-arrow">&rarr;</span></a>{{else}}<span class="dn-link dn-disabled">Next <span class="dn-arrow">&rarr;</span></span>{{end}}
       </nav>
 
       {{- if .IsAdmin}}
@@ -82,22 +83,22 @@
         <form method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')"><button type="submit">Delete</button></form>
       </div>
       {{- end}}
+
+      {{if .Related}}
+      <section class="related">
+        <h3>Related</h3>
+        <div class="related-grid">
+          {{- range .Related}}
+          <a href="{{.DetailURL}}" class="related-item">
+            {{- if .ThumbURL}}<img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy">
+            {{- else}}<span class="related-tile">{{if eq .Kind "document"}}{{fileext .FileName}}{{else}}{{.Kind}}{{end}}</span>{{end}}
+          </a>
+          {{- end}}
+        </div>
+      </section>
+      {{end}}
     </div>
   </div>
-
-  {{if .Related}}
-  <section class="related">
-    <h3>Related</h3>
-    <div class="related-grid">
-      {{- range .Related}}
-      <a href="{{.DetailURL}}" class="related-item">
-        {{- if .ThumbURL}}<img src="{{.ThumbURL}}" alt="{{.Title}}" loading="lazy">
-        {{- else}}<span class="related-tile">{{if eq .Kind "document"}}{{fileext .FileName}}{{else}}{{.Kind}}{{end}}</span>{{end}}
-      </a>
-      {{- end}}
-    </div>
-  </section>
-  {{end}}
 
   <div class="lightbox" id="lightbox"><img id="lightbox-img" src="" alt=""></div>
 

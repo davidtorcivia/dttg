@@ -32,8 +32,8 @@ input, textarea, select { color:var(--text); }
 .card-img-container { flex:1; position:relative; min-width:0; }
 .card-img-container img { width:100%; height:auto; display:block; filter:contrast(1.1); background:var(--line); }
 .card-text { font-weight:300; font-size:1rem; line-height:1.6; padding:.5rem 0; word-break:break-word; }
-.card-meta { flex:0 0 1.5rem; writing-mode:vertical-rl; text-orientation:mixed; display:flex; justify-content:flex-start; border-left:1px solid var(--line); padding-left:.5rem; }
-.meta-info { font-size:.55rem; display:flex; gap:1.5rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; }
+.card-meta { flex:0 0 1.8rem; writing-mode:vertical-rl; text-orientation:mixed; display:flex; justify-content:flex-start; border-left:1px solid var(--line); padding-left:.5rem; }
+.meta-info { font-size:.64rem; display:flex; gap:1.5rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; }
 .empty { color:var(--faint); text-transform:uppercase; letter-spacing:.1em; font-size:.8rem; }
 
 /* ---------- detail ---------- */
@@ -41,11 +41,15 @@ input, textarea, select { color:var(--text); }
 .back-btn:hover { color:var(--text); }
 .detail-container { display:flex; gap:4rem; max-width:1600px; align-items:flex-start; }
 .image-wrapper { flex:0 0 70%; min-width:0; }
-/* Fit the whole image within the viewport on open (height-capped so a tall image
-   is fully visible without scrolling); box keeps the exact aspect ratio. */
-.image-wrapper img { display:block; max-width:100%; max-height:calc(100vh - 13rem); width:auto; height:auto; filter:contrast(1.1); }
-.expand-full { display:block; margin-top:.9rem; background:none; border:1px solid var(--line); color:var(--muted); font:inherit; font-size:.6rem; text-transform:uppercase; letter-spacing:.12em; padding:.5rem .9rem; cursor:pointer; transition:color .3s, border-color .3s; }
-.expand-full:hover { color:var(--text); border-color:var(--text); }
+/* Fit the whole image within the viewport on open (the exact cap is set in JS so
+   the image + its caption/expand link are fully visible without scrolling); this
+   calc is the no-JS fallback. Box keeps the exact aspect ratio (no bars). */
+.image-wrapper img { display:block; max-width:100%; max-height:calc(100vh - 14rem); width:auto; height:auto; filter:contrast(1.1); }
+.image-wrapper img.expanded { max-width:none; max-height:none; } /* full size, scroll the page/column */
+.image-wrapper.is-expanded { overflow-x:auto; }
+.item-caption { margin-top:.9rem; text-align:right; font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.expand-full { display:inline-block; margin-top:.7rem; background:none; border:none; padding:0; font:inherit; font-size:.66rem; letter-spacing:.06em; color:var(--muted); cursor:pointer; transition:color .3s; }
+.expand-full:hover { color:var(--text); }
 .detail-text { font-weight:300; font-size:1.4rem; line-height:1.7; }
 .info-wrapper { flex:1; border-left:1px solid var(--line); padding-left:2rem; position:sticky; top:4rem; }
 .info-grid { display:grid; grid-template-columns:100px 1fr; gap:1rem 0; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-bottom:2rem; border-bottom:1px solid var(--line); padding-bottom:2rem; }
@@ -65,7 +69,8 @@ input, textarea, select { color:var(--text); }
 .translate-btn:hover { color:var(--text); }
 .translate-btn[disabled] { opacity:.55; cursor:default; }
 .detail-nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:2.5rem 0 0; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
-.detail-nav .dn-link { text-decoration:none; color:var(--text); transition:opacity .3s; }
+.detail-nav .dn-link { display:inline-flex; align-items:center; gap:.4rem; text-decoration:none; color:var(--text); transition:opacity .3s; }
+.detail-nav .dn-arrow { font-size:1.15em; line-height:1; }
 .detail-nav .dn-link:hover { opacity:.5; }
 .detail-nav .dn-index { text-decoration:none; color:var(--faint); transition:color .3s; }
 .detail-nav .dn-index:hover { color:var(--text); }
@@ -210,7 +215,7 @@ input, textarea, select { color:var(--text); }
 /* Size the element box to the video's own dimensions, scaled down to fit the
    wrapper width and 82vh — so the box matches the video's aspect ratio exactly
    (no stretching, no letterbox bars). Centered when narrower than the wrapper. */
-.detail-video { display:block; max-width:100%; max-height:82vh; width:auto; height:auto; margin-inline:auto; background:#000; }
+.detail-video { display:block; max-width:100%; max-height:calc(100vh - 14rem); width:auto; height:auto; background:#000; }
 .video-tile .doc-ext { opacity:.85; }
 
 /* ---------- detail admin controls ---------- */
@@ -284,10 +289,10 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 .col-meta a { color:var(--faint); text-decoration:none; }
 .col-meta a:hover { color:var(--text); }
 
-/* ---------- related ---------- */
-.related { max-width:1600px; margin:4rem 0 0; }
+/* ---------- related (lives in the detail right column) ---------- */
+.related { margin:2.5rem 0 0; padding-top:1.5rem; border-top:1px solid var(--line); }
 .related h3 { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:var(--faint); margin-bottom:1.2rem; }
-.related-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:1rem; }
+.related-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; }
 .related-item { display:block; aspect-ratio:1; overflow:hidden; background:var(--line); opacity:0; transform:translateY(18px); transition:opacity .6s cubic-bezier(.2,.8,.2,1), transform .6s cubic-bezier(.2,.8,.2,1); }
 .related.revealed .related-item { opacity:1; transform:translateY(0); }
 .related.revealed .related-item:nth-child(2){transition-delay:.06s}
@@ -298,8 +303,9 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 .related-item img { width:100%; height:100%; object-fit:cover; display:block; filter:contrast(1.1); transition:opacity .3s; }
 .related-item:hover img { opacity:.6; }
 .related-tile { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:var(--text); color:var(--bg); font-size:.55rem; text-transform:uppercase; letter-spacing:.1em; }
-@media (max-width:1000px) { .related-grid { grid-template-columns:repeat(4,1fr); } }
-@media (max-width:600px) { .related-grid { grid-template-columns:repeat(3,1fr); } }
+/* once the detail layout stacks, the right column is full-width — fit more thumbs */
+@media (max-width:1000px) { .related-grid { grid-template-columns:repeat(6,1fr); } }
+@media (max-width:600px) { .related-grid { grid-template-columns:repeat(4,1fr); } }
 
 /* ---------- board keyboard focus ---------- */
 .card.kbd-focus { outline:2px solid var(--text); outline-offset:6px; }
