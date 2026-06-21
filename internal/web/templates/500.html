@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en"{{if .ThemeAttr}} data-theme="{{.ThemeAttr}}"{{end}}>
+<head>
+  <title>Error — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="login-wrap">
+    <h1>500 — Something cracked</h1>
+    <p class="login-error">An unexpected error occurred. Please try again.</p>
+    <a href="/" class="back-btn">&larr; Back to index</a>
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

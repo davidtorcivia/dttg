@@ -46,7 +46,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	items, err := s.store.ListItems(r.Context(), store.ItemFilter{IncludePrivate: true, Limit: 1000})
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	pd := s.page(r, "ADMIN")
@@ -102,7 +102,7 @@ func (s *Server) handleAdminEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	it, err := s.store.GetItem(r.Context(), id, true)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if it == nil {
@@ -128,11 +128,11 @@ func (s *Server) handleAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		catID, _ = s.store.GetOrCreateCategory(r.Context(), c)
 	}
 	if err := s.store.UpdateItem(r.Context(), id, r.FormValue("title"), r.FormValue("note"), r.FormValue("source_url"), catID, r.FormValue("visibility")); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if err := s.store.SetItemTags(r.Context(), id, splitTags(r.FormValue("tags"))); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, "/item/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
@@ -148,7 +148,7 @@ func (s *Server) handleAdminReplaceMedia(w http.ResponseWriter, r *http.Request)
 	}
 	editURL := "/admin/items/" + strconv.FormatInt(id, 10) + "/edit"
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	f, fh, err := r.FormFile("file")
@@ -159,11 +159,11 @@ func (s *Server) handleAdminReplaceMedia(w http.ResponseWriter, r *http.Request)
 	defer f.Close()
 	data, rerr := io.ReadAll(io.LimitReader(f, maxUpload))
 	if rerr != nil {
-		s.serverError(w, rerr)
+		s.serverError(w, r, rerr)
 		return
 	}
 	if err := s.ingest.ReplaceFile(r.Context(), id, data, fh.Filename); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, editURL, http.StatusSeeOther)
@@ -181,7 +181,7 @@ func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.store.DeleteItem(r.Context(), id); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -204,7 +204,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	if err := s.store.SetSetting(r.Context(), "tracking_script", r.FormValue("tracking_script")); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	cols := "3"
@@ -212,7 +212,7 @@ func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request)
 		cols = "4"
 	}
 	if err := s.store.SetSetting(r.Context(), "board_columns", cols); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)

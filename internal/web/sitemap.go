@@ -42,7 +42,7 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.store.ListItems(r.Context(), store.ItemFilter{}) // Limit 0 => all public
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	for _, it := range items {

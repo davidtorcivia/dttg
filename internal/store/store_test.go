@@ -68,6 +68,26 @@ func TestPrivateItemVisibility(t *testing.T) {
 	}
 }
 
+func TestPurgeExpiredSessions(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	_ = st.CreateSession(ctx, "valid", time.Hour)
+	_ = st.CreateSession(ctx, "expired", -time.Hour)
+	n, err := st.PurgeExpiredSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Errorf("purged %d, want >= 1", n)
+	}
+	if ok, _ := st.SessionValid(ctx, "valid"); !ok {
+		t.Error("valid session was purged")
+	}
+	if ok, _ := st.SessionValid(ctx, "expired"); ok {
+		t.Error("expired session still valid after purge")
+	}
+}
+
 func TestSettingsRoundtrip(t *testing.T) {
 	st := openTest(t)
 	ctx := context.Background()

@@ -178,6 +178,19 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	return err
 }
 
+// PurgeExpiredSessions removes sessions past their expiry so the table doesn't
+// grow without bound (run periodically).
+func (s *Store) PurgeExpiredSessions(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= unixepoch()`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Ping verifies database connectivity (used by the readiness probe).
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 // ---------- api tokens ----------
 
 func (s *Store) CreateToken(ctx context.Context, name, hash string) (int64, error) {

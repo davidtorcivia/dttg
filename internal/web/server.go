@@ -83,6 +83,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /media/", http.StripPrefix("/media/", http.FileServer(http.Dir(s.cfg.MediaDir))))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.store.Ping(r.Context()); err != nil {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready"))
+	})
 	mux.HandleFunc("GET /api/weather", s.handleWeather)
 
 	// PWA (root scope) — installability + Android share target
@@ -138,7 +145,7 @@ func (s *Server) Handler() http.Handler {
 	// PWA share target (the installed app posts shared content here)
 	mux.HandleFunc("POST /share", s.requireAdmin(s.handleShare))
 
-	return logRequests(mux)
+	return logRequests(s.securityHeaders(s.recoverPanic(mux)))
 }
 
 // serveEmbedded serves a single embedded static file at a root path with a

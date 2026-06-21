@@ -18,6 +18,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"donottouchtheglass/internal/backup"
@@ -163,6 +165,10 @@ func serve(cfg config.Config) {
 
 	ms := mustMedia(cfg)
 
+	// Cancelled on SIGINT/SIGTERM — drives graceful shutdown + background loops.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var bc web.BackupController
 	if cfg.BackupsEnabled() {
 		bp, err := newBackuper(cfg, st)
@@ -180,13 +186,46 @@ func serve(cfg config.Config) {
 		log.Fatal(err)
 	}
 
+	// Periodically purge expired sessions so the table doesn't grow unbounded.
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for {
+			if n, err := st.PurgeExpiredSessions(context.Background()); err != nil {
+				log.Printf("session purge: %v", err)
+			} else if n > 0 {
+				log.Printf("purged %d expired sessions", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// No Read/WriteTimeout on purpose: /media streams large files and admin
+		// uploads can be slow. ReadHeaderTimeout (Slowloris) + the per-handler 30MB
+		// cap + the fronting reverse proxy cover the slow-client risk.
 	}
-	log.Printf("DO NOT TOUCH THE GLASS — listening on %s (public %s)", cfg.Addr, cfg.BaseURL)
-	if err := httpSrv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	go func() {
+		log.Printf("DO NOT TOUCH THE GLASS — listening on %s (public %s)", cfg.Addr, cfg.BaseURL)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Printf("shutting down…")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
 	}
 }

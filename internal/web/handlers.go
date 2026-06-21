@@ -57,6 +57,7 @@ type pageData struct {
 	ThemeAttr      string        // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
 	BoardColumns   int           // masonry columns on wide screens (3 or 4)
 	JSONLD         template.HTML // detail page: schema.org structured data (already JSON-escaped)
+	Nonce          string        // per-request CSP nonce for inline <script> tags
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
@@ -78,6 +79,7 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		colorScheme = c.Value
 		themeAttr = c.Value
 	}
+	nonce := nonceFromContext(r.Context())
 	pd := pageData{
 		Cfg:         s.cfg,
 		IsAdmin:     isAdmin,
@@ -85,6 +87,7 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		PageTitle:   title,
 		ColorScheme: colorScheme,
 		ThemeAttr:   themeAttr,
+		Nonce:       nonce,
 		Meta: metaTags{
 			Description: s.cfg.SiteTitle + " — a personal visual archive.",
 			URL:         s.absURL(r.URL.Path),
@@ -93,9 +96,10 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		},
 	}
 	// Inject the analytics snippet on public views only (don't track admin/self).
+	// The nonce is added so it's allowed under the strict CSP script-src.
 	if !isAdmin {
 		if ts, _ := s.store.GetSetting(r.Context(), "tracking_script"); ts != "" {
-			pd.TrackingScript = template.HTML(ts) //nolint:gosec // admin-provided, trusted
+			pd.TrackingScript = template.HTML(injectNonce(ts, nonce)) //nolint:gosec // admin-provided, trusted
 		}
 	}
 	return pd
@@ -151,7 +155,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r))
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		for _, it := range items {
@@ -198,7 +202,7 @@ func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r))
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	for _, it := range items {
@@ -229,7 +233,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 
 	items, err := s.store.ListItems(r.Context(), f)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 
@@ -265,7 +269,7 @@ func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.store.ListItems(r.Context(), f)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -295,7 +299,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	it, err := s.store.GetItem(r.Context(), id, s.isAdmin(r))
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if it == nil {
@@ -313,7 +317,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		pd.Meta.Description = d
 	}
 	pd.Meta.Image = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
-	pd.JSONLD = s.itemJSONLD(v)
+	pd.JSONLD = s.itemJSONLD(v, pd.Nonce)
 	if it.Title == "" {
 		pd.PageTitle = s.cfg.SiteTitle
 	}
@@ -349,7 +353,7 @@ func itemDescription(it store.Item) string {
 // itemJSONLD builds schema.org structured data for a detail page. Go's json
 // encoder escapes <, > and & as \u00xx, so the result is safe to drop straight
 // into a <script type="application/ld+json"> block.
-func (s *Server) itemJSONLD(v itemView) template.HTML {
+func (s *Server) itemJSONLD(v itemView, nonce string) template.HTML {
 	it := v.Item
 	name := it.Title
 	if name == "" {
@@ -402,7 +406,11 @@ func (s *Server) itemJSONLD(v itemView) template.HTML {
 	// Build the whole <script> element here and emit it in HTML context: json.Marshal
 	// escapes <, > and & as \u00xx so there's no </script> breakout, and this avoids
 	// html/template applying JS-string escaping to the value inside a <script> tag.
-	return template.HTML(`<script type="application/ld+json">` + string(b) + `</script>`) //nolint:gosec
+	attr := ""
+	if nonce != "" {
+		attr = ` nonce="` + nonce + `"`
+	}
+	return template.HTML(`<script type="application/ld+json"` + attr + `>` + string(b) + `</script>`) //nolint:gosec
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -423,9 +431,13 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	_, _ = w.Write(buf.Bytes())
 }
 
-func (s *Server) serverError(w http.ResponseWriter, err error) {
-	log.Printf("server error: %v", err)
-	http.Error(w, "internal server error", http.StatusInternalServerError)
+func (s *Server) serverError(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("server error: %v (%s %s)", err, r.Method, r.URL.Path)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusInternalServerError)
+	if terr := s.tmpl.ExecuteTemplate(w, "500.html", s.page(r, "ERROR")); terr != nil {
+		log.Printf("render 500: %v", terr)
+	}
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {

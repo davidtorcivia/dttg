@@ -144,7 +144,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.loginRL.reset(ip)
 		sid := newSessionID()
 		if err := s.store.CreateSession(r.Context(), sid, sessionTTL); err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.setSessionCookie(w, sid)

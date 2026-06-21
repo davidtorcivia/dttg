@@ -2,7 +2,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="{{.ColorScheme}}">
-  <script>(function(){try{var d=document.documentElement,t=localStorage.getItem('dnttg-theme');if(t!=='light'&&t!=='dark'){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}d.setAttribute('data-theme',t);d.style.colorScheme=t;document.cookie='dnttg-theme='+t+';path=/;max-age=31536000;samesite=lax';}catch(e){}})();</script>
+  <script nonce="{{.Nonce}}">(function(){try{var d=document.documentElement,t=localStorage.getItem('dnttg-theme');if(t!=='light'&&t!=='dark'){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}d.setAttribute('data-theme',t);d.style.colorScheme=t;document.cookie='dnttg-theme='+t+';path=/;max-age=31536000;samesite=lax';}catch(e){}})();</script>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -73,7 +73,7 @@
 {{end}}
 
 {{define "tail"}}
-<script src="{{asset "/static/js/app.js"}}"></script>
+<script nonce="{{.Nonce}}" src="{{asset "/static/js/app.js"}}"></script>
 {{end}}
 
 {{define "card"}}

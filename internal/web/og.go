@@ -57,7 +57,7 @@ func (s *Server) handleOGImage(w http.ResponseWriter, r *http.Request) {
 	}
 	var buf bytes.Buffer
 	if err := imaging.Encode(&buf, s.renderOGCard(*it, cover), imaging.JPEG, imaging.JPEGQuality(88)); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")

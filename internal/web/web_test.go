@@ -160,6 +160,32 @@ func TestFeeds(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersAndNonce(t *testing.T) {
+	s := newTestServer(t)
+	rec := getReq(t, s.Handler(), "/")
+	h := rec.Header()
+	if h.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("missing X-Content-Type-Options: nosniff")
+	}
+	if h.Get("Referrer-Policy") == "" || h.Get("X-Frame-Options") == "" {
+		t.Errorf("missing Referrer-Policy / X-Frame-Options")
+	}
+	csp := h.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "script-src") || !strings.Contains(csp, "nonce-") {
+		t.Fatalf("CSP missing script-src nonce: %q", csp)
+	}
+	if !strings.Contains(rec.Body.String(), "nonce=") {
+		t.Errorf("rendered page has no nonce on its scripts")
+	}
+}
+
+func TestReadyProbe(t *testing.T) {
+	s := newTestServer(t)
+	if rec := getReq(t, s.Handler(), "/ready"); rec.Code != http.StatusOK {
+		t.Errorf("/ready = %d, want 200", rec.Code)
+	}
+}
+
 func TestLoginLimiter(t *testing.T) {
 	l := newLoginLimiter()
 	const key = "1.2.3.4"
