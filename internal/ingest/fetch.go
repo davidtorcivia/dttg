@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	maxDownload = 25 << 20 // 25 MB cap per fetch
+	maxDownload = 27 << 20 // 27 MB per fetch — headroom over the 25 MB video embed cap
 	userAgent   = "dnttg/1.0 (+archive bot)"
 )
 

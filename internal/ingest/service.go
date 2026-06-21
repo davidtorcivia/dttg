@@ -105,7 +105,7 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 					}
 				} else if t.VideoURL != "" {
 					// Self-host the video when it's small enough to embed inline.
-					if r, e := s.fetch(ctx, t.VideoURL); e == nil && strings.HasPrefix(r.ContentType, "video/") && len(r.Body) > 0 && len(r.Body) < videoEmbedMax {
+					if r, e := s.fetch(ctx, t.VideoURL); e == nil && strings.HasPrefix(r.ContentType, "video/") && len(r.Body) > 0 && len(r.Body) <= videoEmbedMax {
 						kind, videoBytes, videoCT = "embed", r.Body, r.ContentType
 						videoName = fileNameFromURL(r.FinalURL)
 					}
@@ -364,7 +364,7 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		)
 
 	case strings.HasPrefix(ct, "video/"):
-		if len(fileBytes) >= videoEmbedMax {
+		if len(fileBytes) > videoEmbedMax {
 			return fmt.Errorf("video too large to self-host (max %d MB)", videoEmbedMax>>20)
 		}
 		asset := randAsset()
@@ -504,7 +504,7 @@ func mimeByExt(name string) string {
 	return ""
 }
 
-const videoEmbedMax = 20 << 20 // self-host + embed videos up to ~20 MB; larger ones stay links
+const videoEmbedMax = 25 << 20 // self-host + embed videos up to 25 MB; larger ones stay links
 
 func extForVideo(ct, name string) string {
 	if e := strings.ToLower(filepath.Ext(name)); e != "" && len(e) <= 6 {
