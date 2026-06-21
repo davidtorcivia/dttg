@@ -14,11 +14,12 @@
     <div class="image-wrapper">
       {{- with .Item}}
       {{- if and (eq .Kind "embed") (hasPrefix .FileMime "video/")}}
-      <video class="detail-video" controls preload="metadata" src="{{.FileURL}}"></video>
+      <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
       {{- else if and (eq .Kind "embed") .EmbedHTML}}
       <div class="embed-wrap">{{safeHTML .EmbedHTML}}</div>
       {{- else if .CoverURL}}
       <img src="{{.CoverURL}}" alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}">
+      <button type="button" class="expand-full" id="expand-full" hidden>&#11036; Expand full size</button>
       {{- else if eq .Kind "document"}}
         {{- if eq .FileMime "application/pdf"}}
       <iframe class="pdf-frame" src="{{.FileURL}}#view=FitH" title="{{.FileName}}"></iframe>

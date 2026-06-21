@@ -166,6 +166,16 @@
     input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 200); });
   })();
 
+  // ---- detail video: native controls only while hovered ----
+  // (the video autoplays muted on a loop; controls would otherwise sit on top of
+  // it the whole time). Toggle the attribute since CSS can't hide native controls
+  // cross-browser. Pointer-only — autoplay can auto-focus the video, so keying
+  // off focus would make the controls appear on load.
+  document.querySelectorAll('video.detail-video').forEach(function (v) {
+    v.addEventListener('pointerenter', function () { v.setAttribute('controls', ''); });
+    v.addEventListener('pointerleave', function () { v.removeAttribute('controls'); });
+  });
+
   // ---- detail prev/next keyboard nav (arrow keys) ----
   (function () {
     var prev = document.getElementById('nav-prev');
@@ -316,6 +326,23 @@
     });
     box.addEventListener('click', function (e) { if (e.target === box) box.classList.remove('open'); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') box.classList.remove('open'); });
+
+    // "Expand full size" — shown only when the detail image is displayed smaller
+    // than its source (i.e. there's more detail to see); opens the lightbox.
+    var dimg = document.querySelector('.image-wrapper img.zoomable');
+    var btn = document.getElementById('expand-full');
+    if (dimg && btn) {
+      var sync = function () {
+        var bigger = dimg.naturalWidth > dimg.clientWidth + 4 || dimg.naturalHeight > dimg.clientHeight + 4;
+        btn.hidden = !(dimg.clientWidth && bigger);
+      };
+      if (dimg.complete && dimg.naturalWidth) sync(); else dimg.addEventListener('load', sync);
+      window.addEventListener('resize', sync);
+      btn.addEventListener('click', function () {
+        img.src = dimg.getAttribute('data-full') || dimg.src;
+        box.classList.add('open');
+      });
+    }
   })();
 
   // ---- shortcuts sheet + global keys (?, g, d, esc) ----
