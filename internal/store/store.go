@@ -549,6 +549,32 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, title, note, sourceURL
 	return err
 }
 
+// UpdateItemMedia replaces all media-related columns of an item (used when the
+// owner deletes and re-uploads the file/image without recreating the item). It
+// also updates the kind, since the new file may be a different type.
+func (s *Store) UpdateItemMedia(ctx context.Context, id int64, it Item) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE items SET
+			kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, placeholder=?,
+			dominant_color=?, width=?, height=?,
+			file_key=?, file_name=?, file_mime=?, file_size=?,
+			embed_provider=?, embed_html=?,
+			updated_at=unixepoch()
+		WHERE id=?`,
+		it.Kind, it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.Placeholder,
+		it.DominantColor, it.Width, it.Height,
+		it.FileKey, it.FileName, it.FileMime, it.FileSize,
+		it.EmbedProvider, it.EmbedHTML, id)
+	return err
+}
+
+// ClearMediaForItem removes an item's media rows (blobs are deleted separately
+// by the caller via the media store before this runs).
+func (s *Store) ClearMediaForItem(ctx context.Context, itemID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM media WHERE item_id=?`, itemID)
+	return err
+}
+
 // SetItemTags replaces an item's tags with the given names.
 func (s *Store) SetItemTags(ctx context.Context, itemID int64, names []string) error {
 	tx, err := s.db.BeginTx(ctx, nil)

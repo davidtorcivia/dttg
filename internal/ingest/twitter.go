@@ -37,9 +37,11 @@ func cleanTweetURL(raw string) string {
 }
 
 type tweetMedia struct {
-	Text   string
-	Author string
-	Photos []string
+	Text       string
+	Author     string
+	Photos     []string
+	VideoURL   string // direct .mp4 of the tweet's video, if any
+	VideoThumb string // poster frame for the video
 }
 
 // photo returns the URL of the 1-based idx photo, or the first photo, or "".
@@ -71,6 +73,10 @@ func (s *Service) fetchTweet(ctx context.Context, id string) (*tweetMedia, error
 				Photos []struct {
 					URL string `json:"url"`
 				} `json:"photos"`
+				Videos []struct {
+					URL          string `json:"url"`
+					ThumbnailURL string `json:"thumbnail_url"`
+				} `json:"videos"`
 			} `json:"media"`
 		} `json:"tweet"`
 	}
@@ -84,6 +90,12 @@ func (s *Service) fetchTweet(ctx context.Context, id string) (*tweetMedia, error
 	for _, p := range data.Tweet.Media.Photos {
 		if p.URL != "" {
 			t.Photos = append(t.Photos, p.URL)
+		}
+	}
+	for _, v := range data.Tweet.Media.Videos {
+		if v.URL != "" {
+			t.VideoURL, t.VideoThumb = v.URL, v.ThumbnailURL
+			break // archive the first video
 		}
 	}
 	return t, nil

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -135,6 +136,37 @@ func (s *Server) handleAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/item/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// handleAdminReplaceMedia swaps the file/image on an item for a freshly uploaded
+// one, keeping the item and its metadata (title, note, source, tags, etc.).
+func (s *Server) handleAdminReplaceMedia(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	editURL := "/admin/items/" + strconv.FormatInt(id, 10) + "/edit"
+	if err := r.ParseMultipartForm(maxUpload); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	f, fh, err := r.FormFile("file")
+	if err != nil {
+		http.Redirect(w, r, editURL, http.StatusSeeOther) // no file chosen
+		return
+	}
+	defer f.Close()
+	data, rerr := io.ReadAll(io.LimitReader(f, maxUpload))
+	if rerr != nil {
+		s.serverError(w, rerr)
+		return
+	}
+	if err := s.ingest.ReplaceFile(r.Context(), id, data, fh.Filename); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, editURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {

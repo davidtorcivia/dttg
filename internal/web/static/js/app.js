@@ -8,6 +8,56 @@
     });
   }
 
+  // ---- row-major masonry ----
+  // The board reads chronologically left-to-right across the top row, then wraps
+  // down (newest three in the top row, etc.). Cards are distributed round-robin
+  // into N flex columns; each column still packs to its own content height, so it
+  // stays a masonry without the column-major fill order of CSS `column-count`.
+  function gridColumnCount(maxCols) {
+    var w = window.innerWidth;
+    if (w <= 600) return 1;
+    if (w <= 1000) return 2;
+    return maxCols;
+  }
+  function gridMaxCols(grid) {
+    var v = parseInt(grid.style.getPropertyValue('--cols'), 10);
+    return (v === 3 || v === 4) ? v : 3;
+  }
+  function layoutMasonry(grid, force) {
+    var n = gridColumnCount(gridMaxCols(grid));
+    if (!force && grid.__n === n) return; // column count unchanged; nothing to do
+    var cards = Array.prototype.slice.call(grid.querySelectorAll('.card'));
+    var frag = document.createDocumentFragment();
+    var cols = [];
+    for (var i = 0; i < n; i++) {
+      var c = document.createElement('div');
+      c.className = 'grid-col';
+      cols.push(c);
+      frag.appendChild(c);
+    }
+    cards.forEach(function (card, i) { cols[i % n].appendChild(card); });
+    grid.textContent = '';
+    grid.appendChild(frag);
+    grid.__cols = cols;
+    grid.__n = n;
+  }
+  // Append one card, continuing the round-robin from the current card count.
+  function masonryAppend(grid, card) {
+    var cols = grid.__cols;
+    if (!cols || !cols.length) { grid.appendChild(card); return; }
+    cols[grid.querySelectorAll('.card').length % cols.length].appendChild(card);
+  }
+  (function () {
+    var grid = document.getElementById('grid');
+    if (!grid) return;
+    layoutMasonry(grid, true);
+    var rt;
+    window.addEventListener('resize', function () {
+      clearTimeout(rt);
+      rt = setTimeout(function () { layoutMasonry(grid); }, 150);
+    });
+  })();
+
   // ---- custom blend-mode cursor (fine pointers only) ----
   if (window.matchMedia('(pointer: fine)').matches) {
     var cursor = document.createElement('div');
@@ -108,6 +158,7 @@
         .then(function (html) {
           grid.innerHTML = html;
           revive();
+          layoutMasonry(grid, true);
           var n = grid.querySelectorAll('.card').length;
           if (meta) meta.textContent = n + ' result' + (n === 1 ? '' : 's') + ' for “' + q + '”';
         }).catch(function () {});
@@ -184,22 +235,39 @@
   // ---- system clock + NYC weather ----
   var clock = document.getElementById('sys-clock');
   if (clock) {
+    var TEMP_TTL = 15 * 60 * 1000; // refresh the temperature at most this often
     var temp = '--';
     var update = function () {
       var now = new Date();
       var t = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
       clock.textContent = t + ' // NYC ' + temp + '°F';
     };
+    var setTemp = function (v) {
+      temp = v;
+      try { localStorage.setItem('dnttg-temp', JSON.stringify({ t: v, at: Date.now() })); } catch (e) {}
+      update();
+    };
     var fetchWeather = function () {
       fetch('/api/weather')
         .then(function (r) { return r.json(); })
-        .then(function (d) { if (typeof d.temp === 'number') { temp = d.temp; } update(); })
-        .catch(function () { /* leave placeholder */ });
+        .then(function (d) { if (typeof d.temp === 'number') setTemp(d.temp); })
+        .catch(function () { /* keep whatever we already have */ });
     };
+    // Hydrate instantly from the last fetch so moving around the site doesn't
+    // re-request the temperature on every click; only hit the network when the
+    // cached value is missing or older than the TTL.
+    var stale = true;
+    try {
+      var cachedTemp = JSON.parse(localStorage.getItem('dnttg-temp') || 'null');
+      if (cachedTemp && typeof cachedTemp.t === 'number') {
+        temp = cachedTemp.t;
+        stale = Date.now() - (cachedTemp.at || 0) >= TEMP_TTL;
+      }
+    } catch (e) {}
     update();
     setInterval(update, 1000);
-    fetchWeather();
-    setInterval(fetchWeather, 15 * 60 * 1000);
+    if (stale) fetchWeather();
+    setInterval(fetchWeather, TEMP_TTL); // keep it current while the tab stays open
   }
 
   var typing = function (el) { return el && el.matches && el.matches('input, textarea, select'); };
@@ -307,7 +375,7 @@
           if (img) { var c = img.parentElement; c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")'; c.style.backgroundSize = 'cover'; c.style.backgroundPosition = 'center'; }
           var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
           card.classList.add('visible');
-          grid.appendChild(card);
+          masonryAppend(grid, card);
         });
         offset += added.length;
         if (added.length < page) done = true;
@@ -414,31 +482,6 @@
     });
   })();
 
-  // ken burns idle screensaver (single timer, reset on activity)
-  (function () {
-    if (!document.getElementById('grid')) return;
-    var timer, hint;
-    var sleep = function () {
-      document.body.classList.add('screensaver');
-      hint = document.createElement('div');
-      hint.className = 'screensaver-hint';
-      hint.textContent = "you're still looking.";
-      document.body.appendChild(hint);
-    };
-    var wake = function () {
-      if (document.body.classList.contains('screensaver')) {
-        document.body.classList.remove('screensaver');
-        if (hint) { hint.remove(); hint = null; }
-      }
-      clearTimeout(timer);
-      timer = setTimeout(sleep, 90000);
-    };
-    ['mousemove', 'keydown', 'scroll', 'touchstart', 'pointerdown'].forEach(function (ev) {
-      window.addEventListener(ev, wake, { passive: true });
-    });
-    wake();
-  })();
-
   // datamosh the wordmark on a triple-click
   (function () {
     var mark = document.querySelector('.header-left + div');
@@ -451,41 +494,4 @@
     });
   })();
 
-  // seance — park the cursor dead-center to read the glass
-  (function () {
-    var box = null, timer = null;
-    var open = function () {
-      box = document.createElement('div');
-      box.className = 'seance';
-      box.innerHTML = '<div class="seance-inner"><div class="big">…</div><div class="sub">reading the glass</div></div>';
-      document.body.appendChild(box);
-      requestAnimationFrame(function () { box.classList.add('open'); });
-      fetch('/api/stats').then(function (r) { return r.json(); }).then(function (d) {
-        if (!box) return;
-        var big = box.querySelector('.big'), sub = box.querySelector('.sub');
-        var target = d.count || 0, t0 = null;
-        var tick = function (ts) {
-          if (!box) return;
-          if (t0 == null) t0 = ts;
-          var p = Math.min((ts - t0) / 1100, 1);
-          big.textContent = Math.round((1 - Math.pow(1 - p, 3)) * target) + ' pieces';
-          if (p < 1) requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-        sub.textContent = 'archived since ' + d.oldest + ' — you may look, but do not touch';
-      }).catch(function () {});
-      var close = function () {
-        if (!box) return;
-        var b = box; box = null; b.classList.remove('open'); setTimeout(function () { b.remove(); }, 600);
-        document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close);
-      };
-      setTimeout(function () { document.addEventListener('pointerdown', close); document.addEventListener('keydown', close); }, 60);
-    };
-    document.addEventListener('mousemove', function (e) {
-      if (box) return;
-      var near = Math.abs(e.clientX - window.innerWidth / 2) < 110 && Math.abs(e.clientY - window.innerHeight / 2) < 110;
-      clearTimeout(timer);
-      if (near) timer = setTimeout(open, 1600);
-    });
-  })();
 })();

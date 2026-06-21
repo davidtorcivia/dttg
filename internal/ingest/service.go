@@ -98,13 +98,27 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 				it.LinkSiteName = "x.com"
 				setIfEmpty(&it.Title, t.Author)
 				it.SourceURL = cleanTweetURL(in.URL)
+				// A specific /photo/N (or the first photo) wins; otherwise pull a video.
 				if photoURL := t.photo(photoIdx); photoURL != "" {
 					if r, e := s.fetch(ctx, photoURL); e == nil && strings.HasPrefix(r.ContentType, "image/") {
 						kind, imageBytes, imageCT = "image", r.Body, r.ContentType
 					}
+				} else if t.VideoURL != "" {
+					// Self-host the video when it's small enough to embed inline.
+					if r, e := s.fetch(ctx, t.VideoURL); e == nil && strings.HasPrefix(r.ContentType, "video/") && len(r.Body) > 0 && len(r.Body) < videoEmbedMax {
+						kind, videoBytes, videoCT = "embed", r.Body, r.ContentType
+						videoName = fileNameFromURL(r.FinalURL)
+					}
+					// Grab the poster either way, so the board card and (for oversized
+					// videos) the detail page show a frame instead of going blank.
+					if t.VideoThumb != "" {
+						if ri, e := s.fetch(ctx, t.VideoThumb); e == nil && strings.HasPrefix(ri.ContentType, "image/") {
+							imageBytes, imageCT = ri.Body, ri.ContentType
+						}
+					}
 				}
 				if kind == "" {
-					kind = "link" // text-only tweet (or photo fetch failed): keep the text as the quote
+					kind = "link" // text-only tweet (or media fetch failed): keep the text as the quote
 				}
 				tweetHandled = true
 			}
@@ -289,6 +303,116 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		_ = s.store.AttachTag(ctx, id, tagID)
 	}
 	return id, nil
+}
+
+// ReplaceFile swaps the media on an existing item for a freshly uploaded file
+// (image, document, or small video), keeping the item and its metadata. New
+// blobs are stored first; only then are the old blobs + media rows removed, so a
+// failure mid-way never leaves the item without media. The item's kind is updated
+// to match the new file.
+func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byte, fileName string) error {
+	if len(fileBytes) == 0 {
+		return fmt.Errorf("ingest: empty file")
+	}
+	it, err := s.store.GetItem(ctx, itemID, true)
+	if err != nil {
+		return err
+	}
+	if it == nil {
+		return fmt.Errorf("ingest: item %d not found", itemID)
+	}
+
+	ct := sniffContentType(fileName, fileBytes)
+	var next store.Item // only the media-related fields are used
+	var mediaRows []store.Media
+
+	switch {
+	case strings.HasPrefix(ct, "image/"):
+		proc, perr := ProcessImage(fileBytes)
+		if perr != nil {
+			return fmt.Errorf("process image: %w", perr)
+		}
+		asset := randAsset()
+		origKey := fmt.Sprintf("items/%s/original%s", asset, extForContentType(ct))
+		fullKey := fmt.Sprintf("items/%s/full.jpg", asset)
+		thumbKey := fmt.Sprintf("items/%s/thumb.jpg", asset)
+		if err := s.putAll(ctx, []blob{
+			{origKey, orDefault(ct, "application/octet-stream"), fileBytes},
+			{fullKey, "image/jpeg", proc.FullJPEG},
+			{thumbKey, "image/jpeg", proc.ThumbJPEG},
+		}); err != nil {
+			return err
+		}
+		next.Kind = "image"
+		next.CoverKey = fullKey
+		next.ThumbKey = thumbKey
+		next.Placeholder = proc.Placeholder
+		next.DominantColor = proc.DominantColor
+		next.Width, next.Height = proc.Width, proc.Height
+		mediaRows = append(mediaRows,
+			store.Media{Variant: "original", StorageKey: origKey, ContentType: ct, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
+			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: true, OnR2: s.media.Mirrors(fullKey)},
+			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: true, OnR2: s.media.Mirrors(thumbKey)},
+		)
+
+	case strings.HasPrefix(ct, "video/"):
+		if len(fileBytes) >= videoEmbedMax {
+			return fmt.Errorf("video too large to self-host (max %d MB)", videoEmbedMax>>20)
+		}
+		asset := randAsset()
+		ext := extForVideo(ct, fileName)
+		fileKey := fmt.Sprintf("items/%s/video%s", asset, ext)
+		c := orDefault(ct, "application/octet-stream")
+		if err := s.media.Put(ctx, fileKey, c, bytes.NewReader(fileBytes)); err != nil {
+			return err
+		}
+		name := fileName
+		if name == "" {
+			name = "video" + ext
+		}
+		next.Kind = "embed"
+		next.EmbedProvider = "Video"
+		next.FileKey, next.FileName, next.FileMime, next.FileSize = fileKey, name, c, int64(len(fileBytes))
+		mediaRows = append(mediaRows,
+			store.Media{Variant: "video", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)})
+
+	default:
+		asset := randAsset()
+		ext := extForDoc(ct, fileName)
+		fileKey := fmt.Sprintf("items/%s/file%s", asset, ext)
+		c := orDefault(ct, "application/octet-stream")
+		if err := s.media.Put(ctx, fileKey, c, bytes.NewReader(fileBytes)); err != nil {
+			return err
+		}
+		name := fileName
+		if name == "" {
+			name = "file" + ext
+		}
+		next.Kind = "document"
+		next.FileKey, next.FileName, next.FileMime, next.FileSize = fileKey, name, c, int64(len(fileBytes))
+		mediaRows = append(mediaRows,
+			store.Media{Variant: "file", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)})
+	}
+
+	// New blobs are stored; now drop the old ones and rewrite the item's media.
+	if old, lerr := s.store.ListMediaForItem(ctx, itemID); lerr == nil {
+		for _, m := range old {
+			_ = s.media.Delete(ctx, m.StorageKey)
+		}
+	}
+	if err := s.store.ClearMediaForItem(ctx, itemID); err != nil {
+		return err
+	}
+	if err := s.store.UpdateItemMedia(ctx, itemID, next); err != nil {
+		return err
+	}
+	for _, mr := range mediaRows {
+		mr.ItemID = itemID
+		if _, err := s.store.AddMedia(ctx, mr); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type blob struct {

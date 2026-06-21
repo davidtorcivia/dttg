@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/items", s.requireAdmin(s.handleAdminCreate))
 	mux.HandleFunc("GET /admin/items/{id}/edit", s.requireAdmin(s.handleAdminEdit))
 	mux.HandleFunc("POST /admin/items/{id}", s.requireAdmin(s.handleAdminUpdate))
+	mux.HandleFunc("POST /admin/items/{id}/media", s.requireAdmin(s.handleAdminReplaceMedia))
 	mux.HandleFunc("POST /admin/items/{id}/delete", s.requireAdmin(s.handleAdminDelete))
 	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleAdminSettings))
 	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.handleAdminSettingsSave))
