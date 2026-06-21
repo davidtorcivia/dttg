@@ -134,27 +134,14 @@
     });
   })();
 
-  // ---- custom blend-mode cursor + specular glass light (fine pointers only) ----
+  // ---- custom blend-mode cursor (fine pointers only) ----
   if (window.matchMedia('(pointer: fine)').matches) {
     var cursor = document.createElement('div');
     cursor.className = 'cursor';
     document.body.appendChild(cursor);
-    // a soft highlight that tracks the pointer like reflection across glass
-    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var glow = null;
-    if (!reduceMotion) {
-      glow = document.createElement('div');
-      glow.className = 'glass-light';
-      glow.setAttribute('aria-hidden', 'true');
-      document.body.appendChild(glow);
-    }
     document.addEventListener('mousemove', function (e) {
       cursor.style.left = e.clientX + 'px';
       cursor.style.top = e.clientY + 'px';
-      if (glow) {
-        glow.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)';
-        if (!glow.classList.contains('on')) glow.classList.add('on');
-      }
     });
     document.body.addEventListener('mouseover', function (e) {
       var hot = e.target.closest('a, button, img, .card');
