@@ -36,7 +36,12 @@
   function layoutMasonry(grid, force) {
     var n = gridColumnCount(gridMaxCols(grid));
     if (!force && grid.__n === n) return; // column count unchanged; nothing to do
-    var cards = Array.prototype.slice.call(grid.querySelectorAll('.card'));
+    // Redistribute from the captured chronological order, NOT the current DOM order:
+    // after a multi-column layout the DOM is grouped by column, so collapsing to a
+    // single column (e.g. rotating to portrait) would otherwise scramble the order.
+    // Capture on first layout, while the DOM is still in server (chronological) order.
+    if (!grid.__order) grid.__order = Array.prototype.slice.call(grid.querySelectorAll('.card'));
+    var cards = grid.__order;
     grid.textContent = '';
     var cols = [], heights = [];
     for (var i = 0; i < n; i++) {
@@ -61,6 +66,7 @@
   // Append one card into the currently shortest column (infinite scroll).
   function masonryAppend(grid, card) {
     var cols = grid.__cols, heights = grid.__heights;
+    if (grid.__order) grid.__order.push(card); // keep the chronological order in sync
     if (!cols || !cols.length) { grid.appendChild(card); return; }
     var m = shortestCol(heights);
     cols[m].appendChild(card);
@@ -220,6 +226,7 @@
         .then(function (r) { return r.text(); })
         .then(function (html) {
           grid.innerHTML = html;
+          grid.__order = null; // new result set — recapture chronological order
           revive();
           layoutMasonry(grid, true);
           var n = grid.querySelectorAll('.card').length;
