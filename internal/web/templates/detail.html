@@ -4,6 +4,7 @@
   <title>{{if .Item.Title}}{{.Item.Title}} — {{end}}{{.Cfg.SiteTitle}}</title>
   {{template "headtags" .}}
   {{template "seo" .}}
+  {{.JSONLD}}
   {{.TrackingScript}}
 </head>
 <body>
@@ -24,8 +25,8 @@
           {{- if $isVideoFile}}
           <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
           {{- else}}
-          <img src="{{.CoverURL}}" alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}">
-          <button type="button" class="expand-full" id="expand-full" hidden>[ Expand full size ]</button>
+          <img src="{{.CoverURL}}"{{if and .ThumbURL (ne .ThumbURL .CoverURL)}} srcset="{{.ThumbURL}} 800w, {{.CoverURL}} 1600w" sizes="(max-width:1000px) 92vw, 60vw"{{end}} alt="{{.Title}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}" fetchpriority="high"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}>
+          <button type="button" class="expand-full" id="expand-full" hidden>[ expand full size ]</button>
           {{- end}}
         </div>
         {{- if .Title}}<figcaption class="media-title-v">{{.Title}}</figcaption>{{- end}}

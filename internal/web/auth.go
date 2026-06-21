@@ -118,6 +118,15 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if blocked, retry := s.loginRL.blocked(ip); blocked {
+		pd := s.page(r, "LOGIN")
+		pd.Error = "Too many attempts. Try again later."
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		w.WriteHeader(http.StatusTooManyRequests)
+		s.render(w, "login.html", pd)
+		return
+	}
 	pw := r.FormValue("password")
 	hash, _ := s.store.GetSetting(r.Context(), "password_hash")
 	pd := s.page(r, "LOGIN")
@@ -126,11 +135,13 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		pd.Error = "No password configured. Run: dnttg set-password <password>"
 		s.render(w, "login.html", pd)
 	case !VerifyPassword(pw, hash):
+		s.loginRL.fail(ip)
 		time.Sleep(400 * time.Millisecond) // throttle brute force
 		pd.Error = "Incorrect password."
 		w.WriteHeader(http.StatusUnauthorized)
 		s.render(w, "login.html", pd)
 	default:
+		s.loginRL.reset(ip)
 		sid := newSessionID()
 		if err := s.store.CreateSession(r.Context(), sid, sessionTTL); err != nil {
 			s.serverError(w, err)

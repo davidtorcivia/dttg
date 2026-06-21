@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"donottouchtheglass/internal/config"
 	"donottouchtheglass/internal/store"
@@ -21,6 +22,7 @@ type itemView struct {
 	ThumbURL  string // small image (grid)
 	FileURL   string // document/file blob
 	DetailURL string
+	Eager     bool // board: above-the-fold (first row) — load eagerly at high priority
 }
 
 // metaTags drives SEO / Open Graph / Twitter Card output.
@@ -54,6 +56,7 @@ type pageData struct {
 	ColorScheme    string        // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
 	ThemeAttr      string        // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
 	BoardColumns   int           // masonry columns on wide screens (3 or 4)
+	JSONLD         template.HTML // detail page: schema.org structured data (already JSON-escaped)
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
@@ -234,8 +237,14 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	pd.ActiveCat = f.CategorySlug
 	pd.ActiveTag = f.TagSlug
 	pd.BoardColumns = s.boardColumns(r.Context())
-	for _, it := range items {
-		pd.Items = append(pd.Items, s.view(it))
+	for i, it := range items {
+		v := s.view(it)
+		// The masonry distributes cards round-robin, so the first row is the first
+		// N items — load those eagerly at high priority to help the board's LCP.
+		if i < pd.BoardColumns {
+			v.Eager = true
+		}
+		pd.Items = append(pd.Items, v)
 	}
 	if st, err := s.store.PublicStats(r.Context()); err == nil {
 		pd.Stats = &st
@@ -304,6 +313,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		pd.Meta.Description = d
 	}
 	pd.Meta.Image = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
+	pd.JSONLD = s.itemJSONLD(v)
 	if it.Title == "" {
 		pd.PageTitle = s.cfg.SiteTitle
 	}
@@ -334,6 +344,65 @@ func itemDescription(it store.Item) string {
 		}
 	}
 	return ""
+}
+
+// itemJSONLD builds schema.org structured data for a detail page. Go's json
+// encoder escapes <, > and & as \u00xx, so the result is safe to drop straight
+// into a <script type="application/ld+json"> block.
+func (s *Server) itemJSONLD(v itemView) template.HTML {
+	it := v.Item
+	name := it.Title
+	if name == "" {
+		name = s.cfg.SiteTitle
+	}
+	ld := map[string]any{
+		"@context": "https://schema.org",
+		"name":     name,
+		"url":      s.absURL(v.DetailURL),
+	}
+	if d := itemDescription(it); d != "" {
+		ld["description"] = d
+	}
+	if !it.CreatedAt.IsZero() {
+		ld["datePublished"] = it.CreatedAt.Format(time.RFC3339)
+	}
+	if !it.UpdatedAt.IsZero() {
+		ld["dateModified"] = it.UpdatedAt.Format(time.RFC3339)
+	}
+	switch {
+	case it.Kind == "embed" && strings.HasPrefix(it.FileMime, "video/"):
+		ld["@type"] = "VideoObject"
+		if v.FileURL != "" {
+			ld["contentUrl"] = s.absURL(v.FileURL)
+		}
+		ld["thumbnailUrl"] = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
+		if !it.CreatedAt.IsZero() {
+			ld["uploadDate"] = it.CreatedAt.Format(time.RFC3339)
+		}
+	case v.CoverURL != "":
+		ld["@type"] = "ImageObject"
+		ld["contentUrl"] = s.absURL(v.CoverURL)
+		if v.ThumbURL != "" {
+			ld["thumbnailUrl"] = s.absURL(v.ThumbURL)
+		}
+		if it.Width > 0 {
+			ld["width"] = it.Width
+		}
+		if it.Height > 0 {
+			ld["height"] = it.Height
+		}
+	default:
+		ld["@type"] = "Article"
+		ld["headline"] = name
+	}
+	b, err := json.Marshal(ld)
+	if err != nil {
+		return ""
+	}
+	// Build the whole <script> element here and emit it in HTML context: json.Marshal
+	// escapes <, > and & as \u00xx so there's no </script> breakout, and this avoids
+	// html/template applying JS-string escaping to the value inside a <script> tag.
+	return template.HTML(`<script type="application/ld+json">` + string(b) + `</script>`) //nolint:gosec
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

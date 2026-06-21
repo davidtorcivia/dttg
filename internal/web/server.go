@@ -36,9 +36,12 @@ type Server struct {
 	backup  BackupController
 	tmpl    *template.Template
 	weather weatherCache
+	loginRL *loginLimiter
 }
 
-func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service, bc BackupController) (*Server, error) {
+// parseTemplates builds the template set with the shared FuncMap. Extracted from
+// New so tests can render templates without standing up a full Server.
+func parseTemplates() (*template.Template, error) {
 	assetVer := assetVersion()
 	funcs := template.FuncMap{
 		"shortDate": func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02 06")) },
@@ -52,7 +55,11 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 		"safeHTML":  func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec // admin/oEmbed-trusted
 		"asset":     func(p string) string { return p + "?v=" + assetVer },
 	}
-	tmpl, err := template.New("dnttg").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
+	return template.New("dnttg").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
+}
+
+func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service, bc BackupController) (*Server, error) {
+	tmpl, err := parseTemplates()
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
@@ -62,7 +69,7 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 	_ = mime.AddExtensionType(".webp", "image/webp")
 	_ = mime.AddExtensionType(".pdf", "application/pdf")
 
-	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl}
+	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl, loginRL: newLoginLimiter()}
 	s.startWeather()
 	return s, nil
 }
@@ -99,6 +106,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /board/more", s.handleBoardMore)
 	mux.HandleFunc("GET /feed.json", s.handleFeedJSON)
 	mux.HandleFunc("GET /feed.xml", s.handleFeedRSS)
+	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
+	mux.HandleFunc("GET /robots.txt", s.handleRobots)
 
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)

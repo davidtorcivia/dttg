@@ -23,6 +23,8 @@ type Config struct {
 
 	Dev bool // relaxes cookie Secure flag for http://localhost
 
+	TrustProxy bool // trust X-Forwarded-For / X-Real-IP (set when running behind a reverse proxy)
+
 	SiteTitle   string // shown center of the header bar
 	SiteTagline string // shown left of the header bar (e.g. "INDEX")
 
@@ -56,6 +58,7 @@ func Load() Config {
 		BaseURL:      strings.TrimRight(env("DNTTG_BASE_URL", "http://localhost:8080"), "/"),
 		MediaBaseURL: strings.TrimRight(env("DNTTG_MEDIA_BASE_URL", ""), "/"),
 		Dev:          env("DNTTG_DEV", "") != "",
+		TrustProxy:   env("DNTTG_TRUST_PROXY", "") != "",
 		SiteTitle:    env("DNTTG_SITE_TITLE", "DO NOT TOUCH THE GLASS"),
 		SiteTagline:  env("DNTTG_SITE_TAGLINE", "INDEX"),
 		R2AccountID:  env("R2_ACCOUNT_ID", ""),

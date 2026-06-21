@@ -1,0 +1,209 @@
+package web
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"donottouchtheglass/internal/config"
+	"donottouchtheglass/internal/media"
+	"donottouchtheglass/internal/store"
+)
+
+// newTestServer builds a Server backed by a temp sqlite DB and local media dir,
+// without New()'s weather goroutine — hermetic and offline.
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ms, err := media.NewLocalStore(filepath.Join(dir, "media"), "/media")
+	if err != nil {
+		t.Fatalf("media: %v", err)
+	}
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parse templates: %v", err)
+	}
+	return &Server{
+		cfg: config.Config{
+			BaseURL:     "http://localhost:8080",
+			SiteTitle:   "TEST ARCHIVE",
+			SiteTagline: "INDEX",
+			MediaDir:    filepath.Join(dir, "media"),
+		},
+		store:   st,
+		media:   ms,
+		tmpl:    tmpl,
+		loginRL: newLoginLimiter(),
+	}
+}
+
+func getReq(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func TestTemplatesParse(t *testing.T) {
+	if _, err := parseTemplates(); err != nil {
+		t.Fatalf("parse templates: %v", err)
+	}
+}
+
+func TestBoardAndDetail(t *testing.T) {
+	s := newTestServer(t)
+	id, err := s.store.CreateItem(context.Background(), store.Item{
+		Kind: "text", Title: "Hello Glass", Note: "a note", Visibility: "public",
+	})
+	if err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	h := s.Handler()
+
+	if rec := getReq(t, h, "/"); rec.Code != http.StatusOK {
+		t.Fatalf("board status = %d", rec.Code)
+	} else if !strings.Contains(rec.Body.String(), "TEST ARCHIVE") {
+		t.Errorf("board missing site title")
+	}
+
+	rec := getReq(t, h, "/item/"+strconv.FormatInt(id, 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Hello Glass") {
+		t.Errorf("detail missing title")
+	}
+	if !strings.Contains(body, "application/ld+json") {
+		t.Errorf("detail missing JSON-LD")
+	}
+
+	if rec := getReq(t, h, "/item/999999"); rec.Code != http.StatusNotFound {
+		t.Errorf("missing item status = %d, want 404", rec.Code)
+	}
+}
+
+func TestSitemapAndRobots(t *testing.T) {
+	s := newTestServer(t)
+	id, _ := s.store.CreateItem(context.Background(), store.Item{Kind: "text", Title: "X", Visibility: "public"})
+	h := s.Handler()
+
+	rec := getReq(t, h, "/sitemap.xml")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sitemap status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<urlset") {
+		t.Errorf("sitemap missing urlset")
+	}
+	if !strings.Contains(body, "/item/"+strconv.FormatInt(id, 10)) {
+		t.Errorf("sitemap missing item url")
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "xml") {
+		t.Errorf("sitemap content-type = %q", ct)
+	}
+
+	rec = getReq(t, h, "/robots.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("robots status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Sitemap: http://localhost:8080/sitemap.xml") {
+		t.Errorf("robots missing sitemap line: %q", rec.Body.String())
+	}
+}
+
+func TestSrcsetEagerAndImageJSONLD(t *testing.T) {
+	s := newTestServer(t)
+	id, err := s.store.CreateItem(context.Background(), store.Item{
+		Kind: "image", Title: "Pic", Visibility: "public",
+		CoverKey: "items/x/full.jpg", ThumbKey: "items/x/thumb.jpg", Width: 1600, Height: 1000,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	h := s.Handler()
+
+	board := getReq(t, h, "/").Body.String()
+	if !strings.Contains(board, "/media/items/x/thumb.jpg 800w") {
+		t.Errorf("board card missing srcset thumb descriptor")
+	}
+	if !strings.Contains(board, `fetchpriority="high"`) {
+		t.Errorf("first board card not eager (no fetchpriority)")
+	}
+
+	detail := getReq(t, h, "/item/"+strconv.FormatInt(id, 10)).Body.String()
+	if !strings.Contains(detail, `"@type":"ImageObject"`) {
+		t.Errorf("detail JSON-LD is not ImageObject")
+	}
+	if !strings.Contains(detail, "srcset=") || !strings.Contains(detail, `fetchpriority="high"`) {
+		t.Errorf("detail cover missing srcset/fetchpriority")
+	}
+}
+
+func TestFeeds(t *testing.T) {
+	s := newTestServer(t)
+	_, _ = s.store.CreateItem(context.Background(), store.Item{Kind: "text", Title: "Feed Item", Visibility: "public"})
+	h := s.Handler()
+	for _, p := range []string{"/feed.json", "/feed.xml"} {
+		if rec := getReq(t, h, p); rec.Code != http.StatusOK {
+			t.Errorf("%s status = %d", p, rec.Code)
+		}
+	}
+}
+
+func TestLoginLimiter(t *testing.T) {
+	l := newLoginLimiter()
+	const key = "1.2.3.4"
+	if blocked, _ := l.blocked(key); blocked {
+		t.Fatal("blocked before any failures")
+	}
+	for i := 0; i < loginMaxFails; i++ {
+		l.fail(key)
+	}
+	if blocked, _ := l.blocked(key); !blocked {
+		t.Fatalf("not blocked after %d failures", loginMaxFails)
+	}
+	l.reset(key)
+	if blocked, _ := l.blocked(key); blocked {
+		t.Fatal("still blocked after reset")
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.9:5555"
+	req.Header.Set("X-Forwarded-For", "10.0.0.1, 70.0.0.1")
+
+	if ip := s.clientIP(req); ip != "203.0.113.9" {
+		t.Errorf("clientIP (no trust) = %q, want 203.0.113.9", ip)
+	}
+	s.cfg.TrustProxy = true
+	if ip := s.clientIP(req); ip != "10.0.0.1" {
+		t.Errorf("clientIP (trust) = %q, want 10.0.0.1", ip)
+	}
+}
+
+func TestHelpers(t *testing.T) {
+	if got := humanSize(2048); got != "2.0 KB" {
+		t.Errorf("humanSize(2048) = %q", got)
+	}
+	if got := fileExt("foo.PDF"); got != "PDF" {
+		t.Errorf("fileExt = %q", got)
+	}
+	if got := fileExt("noext"); got != "FILE" {
+		t.Errorf("fileExt(noext) = %q", got)
+	}
+	if got := hostname("https://www.example.com/x"); got != "example.com" {
+		t.Errorf("hostname = %q", got)
+	}
+}

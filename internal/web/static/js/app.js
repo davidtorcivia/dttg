@@ -13,10 +13,15 @@
   // down (newest three in the top row, etc.). Cards are distributed round-robin
   // into N flex columns; each column still packs to its own content height, so it
   // stays a masonry without the column-major fill order of CSS `column-count`.
+  // Step the column count down on narrower screens, capped at the configured max.
+  // A 4-column board therefore collapses to 3 / 2 / 1 as the viewport shrinks
+  // (instead of cramming all 4 in until 1000px), and a 3-column board behaves as
+  // before. Each tier targets a comfortable ~300px+ per column.
   function gridColumnCount(maxCols) {
     var w = window.innerWidth;
     if (w <= 600) return 1;
-    if (w <= 1000) return 2;
+    if (w <= 1000) return Math.min(2, maxCols);
+    if (w <= 1400) return Math.min(3, maxCols);
     return maxCols;
   }
   function gridMaxCols(grid) {
@@ -81,6 +86,7 @@
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
+    grid.classList.add('grid--cols'); // upgrade from the block fallback to flex columns
     layoutMasonry(grid, true);
     var rt;
     window.addEventListener('resize', function () {
@@ -207,16 +213,20 @@
     input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 200); });
   })();
 
-  // ---- detail video: custom, on-brand control bar (fades in on hover) ----
-  // (the video autoplays muted on a loop; native controls can't be styled or fade-
+  // ---- detail video: custom, on-brand control bar (fades in on hover/focus) ----
+  // The video autoplays muted on a loop; native controls can't be styled or fade-
   // timed cross-browser, so we draw our own thin monochrome bar — play/pause, a
-  // scrub line, time, and mute — that fades in/out over the media on hover.)
+  // keyboard-operable scrub slider, time, mute, and fullscreen — over the media.
+  // Shortcuts (when the video/controls have focus): Space/k play, j/l/←/→ seek,
+  // m mute, f fullscreen. stopPropagation keeps them off the detail prev/next nav.
   (function () {
     var SVG = {
       play:  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 3l9 5-9 5z" fill="currentColor"/></svg>',
       pause: '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="4" y="3" width="3" height="10" fill="currentColor"/><rect x="9" y="3" width="3" height="10" fill="currentColor"/></svg>',
       sound: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 5.4a3 3 0 0 1 0 5.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-      muted: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 6l3.2 4M14.2 6L11 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+      muted: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 6l3.2 4M14.2 6L11 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+      full:  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+      exit:  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>'
     };
     var fmt = function (t) {
       if (!isFinite(t) || t < 0) t = 0;
@@ -226,39 +236,77 @@
     document.querySelectorAll('video.detail-video').forEach(function (v) {
       var stage = v.parentElement;
       if (!stage) return;
+      v.tabIndex = 0; // reachable by keyboard; focus also reveals the bar (:focus-within)
       var bar = document.createElement('div');
       bar.className = 'vbar';
       bar.innerHTML =
         '<button type="button" class="vbar-btn vbar-play" aria-label="Play / pause"></button>' +
-        '<div class="vbar-track"><div class="vbar-fill"></div></div>' +
+        '<div class="vbar-track" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="vbar-fill"></div></div>' +
         '<span class="vbar-time">0:00</span>' +
-        '<button type="button" class="vbar-btn vbar-mute" aria-label="Mute / unmute"></button>';
+        '<button type="button" class="vbar-btn vbar-mute" aria-label="Mute / unmute"></button>' +
+        '<button type="button" class="vbar-btn vbar-full" aria-label="Fullscreen"></button>';
       stage.appendChild(bar);
       var playBtn = bar.querySelector('.vbar-play');
       var muteBtn = bar.querySelector('.vbar-mute');
+      var fullBtn = bar.querySelector('.vbar-full');
       var track = bar.querySelector('.vbar-track');
       var fill = bar.querySelector('.vbar-fill');
       var timeEl = bar.querySelector('.vbar-time');
 
       var syncPlay = function () { playBtn.innerHTML = v.paused ? SVG.play : SVG.pause; };
       var syncMute = function () { muteBtn.innerHTML = v.muted ? SVG.muted : SVG.sound; };
-      playBtn.addEventListener('click', function () { if (v.paused) { v.play(); } else { v.pause(); } });
-      muteBtn.addEventListener('click', function () { v.muted = !v.muted; syncMute(); });
+      var syncFull = function () { fullBtn.innerHTML = document.fullscreenElement ? SVG.exit : SVG.full; };
+      var togglePlay = function () { if (v.paused) { v.play(); } else { v.pause(); } };
+      var seek = function (d) { if (v.duration) v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + d)); };
+      var toggleFull = function () {
+        if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); }
+        else if (stage.requestFullscreen) { stage.requestFullscreen(); }
+        else if (v.webkitEnterFullscreen) { v.webkitEnterFullscreen(); } // iOS Safari (video only)
+      };
+
+      playBtn.addEventListener('click', togglePlay);
+      muteBtn.addEventListener('click', function () { v.muted = !v.muted; });
+      fullBtn.addEventListener('click', toggleFull);
       v.addEventListener('play', syncPlay);
       v.addEventListener('pause', syncPlay);
       v.addEventListener('volumechange', syncMute);
+      document.addEventListener('fullscreenchange', syncFull);
       v.addEventListener('timeupdate', function () {
-        var d = v.duration || 0;
-        fill.style.width = d ? (v.currentTime / d * 100) + '%' : '0';
+        var d = v.duration || 0, pct = d ? (v.currentTime / d * 100) : 0;
+        fill.style.width = pct + '%';
+        track.setAttribute('aria-valuenow', Math.round(pct));
         timeEl.textContent = fmt(v.currentTime) + (d ? ' / ' + fmt(d) : '');
       });
       track.addEventListener('click', function (e) {
         var r = track.getBoundingClientRect();
-        var frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-        if (v.duration) v.currentTime = frac * v.duration;
+        if (v.duration) v.currentTime = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * v.duration;
+      });
+      track.addEventListener('keydown', function (e) {
+        var handled = true;
+        switch (e.key) {
+          case 'ArrowLeft': case 'ArrowDown': seek(-5); break;
+          case 'ArrowRight': case 'ArrowUp': seek(5); break;
+          case 'Home': if (v.duration) v.currentTime = 0; break;
+          case 'End': if (v.duration) v.currentTime = v.duration; break;
+          default: handled = false;
+        }
+        if (handled) { e.preventDefault(); e.stopPropagation(); }
+      });
+      v.addEventListener('keydown', function (e) {
+        var handled = true;
+        switch (e.key) {
+          case ' ': case 'k': togglePlay(); break;
+          case 'ArrowLeft': case 'j': seek(-5); break;
+          case 'ArrowRight': case 'l': seek(5); break;
+          case 'm': v.muted = !v.muted; break;
+          case 'f': toggleFull(); break;
+          default: handled = false;
+        }
+        if (handled) { e.preventDefault(); e.stopPropagation(); }
       });
       syncPlay();
       syncMute();
+      syncFull();
     });
   })();
 
@@ -396,16 +444,102 @@
     } catch (e) {}
   })();
 
-  // ---- lightbox ----
+  // ---- lightbox (with zoom + pan) ----
+  // Wheel / pinch to zoom toward the pointer, drag to pan when zoomed, click the
+  // image to toggle zoom, click the backdrop or Esc to close. transform-origin is
+  // the default (center), so scaling grows from the middle and translate recenters.
   (function () {
     var box = document.getElementById('lightbox');
     var img = document.getElementById('lightbox-img');
     if (!box || !img) return;
+    var MAX = 6, scale = 1, tx = 0, ty = 0;
+    var pointers = {}, pinchDist = 0, pinchScale = 1, dragId = null, dragX = 0, dragY = 0, dragTx = 0, dragTy = 0, moved = false;
+
+    var clampPan = function () {
+      var bx = Math.max(0, (img.clientWidth * scale - window.innerWidth) / 2 + 40);
+      var by = Math.max(0, (img.clientHeight * scale - window.innerHeight) / 2 + 40);
+      tx = Math.min(bx, Math.max(-bx, tx));
+      ty = Math.min(by, Math.max(-by, ty));
+    };
+    var apply = function (animate) {
+      img.style.transition = animate ? 'transform .3s cubic-bezier(.2,.8,.2,1)' : 'none';
+      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+      img.classList.toggle('lb-zoomed', scale > 1.01);
+    };
+    var reset = function (animate) { scale = 1; tx = 0; ty = 0; apply(animate); };
+    // zoom toward a screen point (cx,cy), keeping that point stationary
+    var zoomTo = function (next, cx, cy, animate) {
+      next = Math.min(MAX, Math.max(1, next));
+      var r = img.getBoundingClientRect();
+      var dx = cx - (r.left + r.width / 2), dy = cy - (r.top + r.height / 2);
+      var ratio = next / scale;
+      tx -= dx * (ratio - 1);
+      ty -= dy * (ratio - 1);
+      scale = next;
+      if (scale <= 1.01) { scale = 1; tx = 0; ty = 0; }
+      clampPan();
+      apply(animate);
+    };
+    var open = function (z) { img.src = z.getAttribute('data-full') || z.src; reset(false); box.classList.add('open'); };
+    var close = function () { box.classList.remove('open'); reset(false); };
+
     document.querySelectorAll('.zoomable').forEach(function (z) {
-      z.addEventListener('click', function () { img.src = z.getAttribute('data-full') || z.src; box.classList.add('open'); });
+      z.addEventListener('click', function () { open(z); });
     });
-    box.addEventListener('click', function (e) { if (e.target === box) box.classList.remove('open'); });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') box.classList.remove('open'); });
+    box.addEventListener('click', function (e) { if (e.target === box) close(); });
+    document.addEventListener('keydown', function (e) {
+      if (!box.classList.contains('open')) return;
+      if (e.key === 'Escape') close();
+      else if (e.key === '+' || e.key === '=') zoomTo(scale * 1.4, window.innerWidth / 2, window.innerHeight / 2, true);
+      else if (e.key === '-' || e.key === '_') zoomTo(scale / 1.4, window.innerWidth / 2, window.innerHeight / 2, true);
+      else if (e.key === '0') reset(true);
+    });
+    box.addEventListener('wheel', function (e) {
+      if (!box.classList.contains('open')) return;
+      e.preventDefault();
+      zoomTo(scale * (e.deltaY < 0 ? 1.18 : 1 / 1.18), e.clientX, e.clientY, false);
+    }, { passive: false });
+
+    img.addEventListener('click', function (e) {
+      e.stopPropagation();              // don't let the backdrop handler close it
+      if (moved) return;                // this was a drag, not a click
+      if (scale > 1.01) reset(true); else zoomTo(2.5, e.clientX, e.clientY, true);
+    });
+
+    // pointer-based pan (1 finger / mouse) + pinch (2 fingers)
+    img.addEventListener('pointerdown', function (e) {
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var ids = Object.keys(pointers);
+      if (ids.length === 1) {
+        dragId = e.pointerId; dragX = e.clientX; dragY = e.clientY; dragTx = tx; dragTy = ty; moved = false;
+        try { img.setPointerCapture(e.pointerId); } catch (err) {}
+      } else if (ids.length === 2) {
+        var a = pointers[ids[0]], b = pointers[ids[1]];
+        pinchDist = Math.hypot(a.x - b.x, a.y - b.y); pinchScale = scale; dragId = null;
+      }
+    });
+    img.addEventListener('pointermove', function (e) {
+      if (!pointers[e.pointerId]) return;
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var ids = Object.keys(pointers);
+      if (ids.length >= 2) {
+        var a = pointers[ids[0]], b = pointers[ids[1]];
+        var dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinchDist > 0) zoomTo(pinchScale * (dist / pinchDist), (a.x + b.x) / 2, (a.y + b.y) / 2, false);
+        moved = true;
+      } else if (e.pointerId === dragId && scale > 1.01) {
+        tx = dragTx + (e.clientX - dragX); ty = dragTy + (e.clientY - dragY);
+        if (Math.abs(e.clientX - dragX) + Math.abs(e.clientY - dragY) > 4) moved = true;
+        clampPan(); apply(false);
+      }
+    });
+    var endPointer = function (e) {
+      delete pointers[e.pointerId];
+      if (Object.keys(pointers).length < 2) pinchDist = 0;
+      if (e.pointerId === dragId) dragId = null;
+    };
+    img.addEventListener('pointerup', endPointer);
+    img.addEventListener('pointercancel', endPointer);
   })();
 
   // ---- detail media: fit to viewport + "expand full size" ----
@@ -464,7 +598,7 @@
         expanded = !expanded;
         media.classList.toggle('expanded', expanded);   // full natural size on the page
         wrap.classList.toggle('is-expanded', expanded);
-        btn.textContent = expanded ? '[ Fit to screen ]' : '[ Expand full size ]';
+        btn.textContent = expanded ? '[ fit to screen ]' : '[ expand full size ]';
         if (expanded) { media.style.maxHeight = ''; window.scrollTo({ top: 0 }); } else refresh();
       });
     }

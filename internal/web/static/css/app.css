@@ -24,9 +24,13 @@ input, textarea, select { color:var(--text); }
 /* ---------- masonry grid ---------- */
 /* Row-major masonry: JS distributes cards round-robin into these columns so the
    newest items read left-to-right across the top row, then wrap down. */
-.grid { display:flex; align-items:flex-start; gap:2rem; }
+/* Mobile-first default: a plain block stack (one column) so the board is never
+   crammed before app.js runs (or if it never does). JS adds .grid--cols once it
+   has distributed the cards into flex columns. */
+.grid { display:block; }
+.grid.grid--cols { display:flex; align-items:flex-start; gap:2rem; }
 .grid-col { flex:1 1 0; min-width:0; display:flex; flex-direction:column; }
-.card { display:flex; gap:.8rem; align-items:stretch; border-top:1px solid var(--line); padding-top:1rem; margin-bottom:4rem; cursor:pointer; text-decoration:none; color:inherit; opacity:0; transform:translateY(40px); transition:opacity .8s cubic-bezier(.2,.8,.2,1), transform .8s cubic-bezier(.2,.8,.2,1); }
+.card { display:flex; gap:.8rem; align-items:stretch; margin-bottom:4rem; cursor:pointer; text-decoration:none; color:inherit; opacity:0; transform:translateY(40px); transition:opacity .8s cubic-bezier(.2,.8,.2,1), transform .8s cubic-bezier(.2,.8,.2,1); }
 .card.visible { opacity:1; transform:translateY(0); }
 .card.visible:hover { opacity:.6; transition-duration:.3s; }
 .card-img-container { flex:1; position:relative; min-width:0; }
@@ -48,7 +52,7 @@ input, textarea, select { color:var(--text); }
 /* media + the vertical title strip down its right side (mirrors the board card meta) */
 .media-frame { display:flex; align-items:flex-start; gap:.8rem; }
 .media-stage { position:relative; min-width:0; }
-.media-title-v { flex:0 0 auto; writing-mode:vertical-rl; text-orientation:mixed; border-left:1px solid var(--line); padding-left:.6rem; font-size:.64rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.media-title-v { flex:0 0 auto; writing-mode:vertical-rl; text-orientation:mixed; padding-left:.2rem; font-size:.64rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; color:var(--muted); white-space:nowrap; overflow:hidden; }
 /* Fit the whole image within the viewport on open (the exact cap is set in JS so
    the image + its caption/expand link are fully visible without scrolling); this
    calc is the no-JS fallback. Box keeps the exact aspect ratio (no bars). */
@@ -239,6 +243,14 @@ input, textarea, select { color:var(--text); }
 .vbar-track { flex:1; height:2px; background:rgba(255,255,255,.28); position:relative; }
 .vbar-fill { position:absolute; inset:0 auto 0 0; width:0; background:#fff; }
 .vbar-time { font-size:.6rem; letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
+.vbar-track:focus-visible { outline:1px solid #fff; outline-offset:3px; }
+.detail-video:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
+/* fullscreen: center the video on black and let it fill (separate rules so an
+   unknown pseudo in one engine doesn't invalidate the other) */
+.media-stage:fullscreen { display:flex; align-items:center; justify-content:center; width:100vw; height:100vh; background:#000; }
+.media-stage:-webkit-full-screen { display:flex; align-items:center; justify-content:center; width:100vw; height:100vh; background:#000; }
+.media-stage:fullscreen video { max-width:100vw; max-height:100vh; width:auto; height:auto; }
+.media-stage:-webkit-full-screen video { max-width:100vw; max-height:100vh; width:auto; height:auto; }
 
 /* ---------- detail admin controls ---------- */
 .detail-admin { display:flex; gap:1.25rem; align-items:center; margin-top:2rem; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
@@ -287,10 +299,11 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 
 /* ---------- lightbox ---------- */
 .zoomable { cursor:zoom-in; }
-.lightbox { position:fixed; inset:0; z-index:11000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.92); padding:3vw; opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; }
+.lightbox { position:fixed; inset:0; z-index:11000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.92); padding:3vw; opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; overflow:hidden; }
 .lightbox.open { opacity:1; visibility:visible; }
-.lightbox img { max-width:100%; max-height:100%; object-fit:contain; transform:scale(.97); transition:transform .35s cubic-bezier(.2,.8,.2,1); }
-.lightbox.open img { transform:scale(1); }
+/* transform is driven by JS (zoom/pan); origin stays center so scaling grows from the middle */
+.lightbox img { max-width:100%; max-height:100%; object-fit:contain; touch-action:none; cursor:zoom-in; will-change:transform; }
+.lightbox img.lb-zoomed { cursor:grab; }
 @media (pointer:fine) { .lightbox { cursor:zoom-out; } }
 
 /* ---------- shortcuts sheet ---------- */
@@ -348,4 +361,23 @@ body.flash-invert { animation:flashInvert .55s ease; }
 @media (max-width:600px) {
   .search-form input, .search-page-form input { font-size:1.4rem; }
   .pdf-frame { height:70vh; }
+}
+
+/* ---------- reduced motion ---------- */
+/* Honour the OS "reduce motion" setting: near-instant transitions/animations and
+   no page-transition morph. Elements that start hidden + animate in are forced to
+   their visible end-state so nothing stays blank if the entrance never plays. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+  .card, .colophon, .related-item, .info-wrapper { opacity:1 !important; transform:none !important; }
+  .image-wrapper img, .detail-text { opacity:1 !important; transform:none !important; animation:none !important; }
+  .cursor.hovering { width:12px; height:12px; } /* no grow */
+}
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
 }
