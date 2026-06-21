@@ -652,12 +652,19 @@
       if (avail > 160) media.style.maxHeight = avail + 'px';
     };
 
-    // Show "expand full size" only when the source is larger than what's shown.
+    // Show "expand full size" only when the displayed image is smaller than the
+    // FULL image — compared against its true dimensions (the width/height attrs =
+    // the full variant), not whatever smaller source srcset loaded for the fit view.
     var syncBtn = function () {
       if (!btn) return;
       if (expanded) { btn.hidden = false; return; }
-      var bigger = media.naturalWidth > media.clientWidth + 4 || media.naturalHeight > media.clientHeight + 4;
-      btn.hidden = !(media.clientWidth && bigger);
+      var fullW = parseInt(media.getAttribute('width'), 10) || media.naturalWidth;
+      var fullH = parseInt(media.getAttribute('height'), 10) || media.naturalHeight;
+      var cw = media.clientWidth, ch = media.clientHeight;
+      // only when the full image is meaningfully larger (>~10%) than what's shown —
+      // otherwise it's effectively already at full size and expanding does nothing
+      var bigger = cw > 0 && (fullW > cw * 1.1 || fullH > ch * 1.1);
+      btn.hidden = !bigger;
     };
 
     // Match the vertical title strip's height to the media so its border runs the
@@ -680,6 +687,12 @@
     if (btn) {
       btn.addEventListener('click', function () {
         expanded = !expanded;
+        if (expanded) {
+          // drop srcset so the genuine full-resolution source (src=CoverURL) is
+          // shown, not the smaller variant srcset chose for the fit view
+          media.removeAttribute('srcset');
+          media.removeAttribute('sizes');
+        }
         media.classList.toggle('expanded', expanded);   // full natural size on the page
         wrap.classList.toggle('is-expanded', expanded);
         btn.textContent = expanded ? '[ fit to screen ]' : '[ expand full size ]';
