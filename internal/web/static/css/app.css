@@ -12,7 +12,7 @@ input, textarea, select { color:var(--text); }
 ::placeholder { color:var(--faint); opacity:1; }
 
 /* ---------- header ---------- */
-.header { display:flex; justify-content:space-between; gap:1rem; border-bottom:1px solid var(--line); padding-bottom:1rem; margin-bottom:2rem; font-size:0.8rem; letter-spacing:0.05em; text-transform:uppercase; }
+.header { display:flex; justify-content:space-between; gap:1rem; border-bottom:1px solid var(--line); padding-bottom:1rem; margin-bottom:2rem; font-size:0.8rem; font-weight:500; letter-spacing:0.05em; text-transform:uppercase; }
 .header a { text-decoration:none; }
 
 /* ---------- category nav ---------- */
@@ -41,6 +41,14 @@ input, textarea, select { color:var(--text); }
 .back-btn:hover { color:var(--text); }
 .detail-container { display:flex; gap:4rem; max-width:1600px; align-items:flex-start; }
 .image-wrapper { flex:0 0 70%; min-width:0; }
+/* For visual media (image / video file) the wrapper shrinks to the media's actual
+   rendered width instead of holding a fixed 70% column — so a portrait/thin item
+   doesn't leave a blank gap, and the info column hugs it immediately to the right. */
+.image-wrapper--fit { flex:0 1 auto; max-width:70%; }
+/* media + the vertical title strip down its right side (mirrors the board card meta) */
+.media-frame { display:flex; align-items:flex-start; gap:.8rem; }
+.media-stage { position:relative; min-width:0; }
+.media-title-v { flex:0 0 auto; writing-mode:vertical-rl; text-orientation:mixed; border-left:1px solid var(--line); padding-left:.6rem; font-size:.64rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; color:var(--muted); white-space:nowrap; overflow:hidden; }
 /* Fit the whole image within the viewport on open (the exact cap is set in JS so
    the image + its caption/expand link are fully visible without scrolling); this
    calc is the no-JS fallback. Box keeps the exact aspect ratio (no bars). */
@@ -51,7 +59,7 @@ input, textarea, select { color:var(--text); }
 .expand-full { display:inline-block; margin-top:.7rem; background:none; border:none; padding:0; font:inherit; font-size:.66rem; letter-spacing:.06em; color:var(--muted); cursor:pointer; transition:color .3s; }
 .expand-full:hover { color:var(--text); }
 .detail-text { font-weight:300; font-size:1.4rem; line-height:1.7; }
-.info-wrapper { flex:1; border-left:1px solid var(--line); padding-left:2rem; position:sticky; top:4rem; }
+.info-wrapper { flex:1 1 0; max-width:32rem; border-left:1px solid var(--line); padding-left:2rem; position:sticky; top:4rem; }
 .info-grid { display:grid; grid-template-columns:100px 1fr; gap:1rem 0; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-bottom:2rem; border-bottom:1px solid var(--line); padding-bottom:2rem; }
 .info-label { color:var(--faint); }
 .info-value { color:var(--text); font-weight:500; }
@@ -101,8 +109,8 @@ input, textarea, select { color:var(--text); }
 /* ---------- responsive ---------- */
 @media (max-width:1000px) {
   .detail-container { flex-direction:column; gap:2rem; }
-  .image-wrapper { flex:auto; width:100%; }
-  .info-wrapper { flex:auto; border-left:none; border-top:1px solid var(--line); padding-left:0; padding-top:2rem; position:relative; top:0; }
+  .image-wrapper, .image-wrapper--fit { flex:auto; width:100%; max-width:none; }
+  .info-wrapper { flex:auto; max-width:none; border-left:none; border-top:1px solid var(--line); padding-left:0; padding-top:2rem; position:relative; top:0; }
 }
 @media (max-width:600px) {
   body { padding:1.5rem 1rem; }
@@ -114,6 +122,10 @@ input, textarea, select { color:var(--text); }
   .meta-info { font-size:.7rem; width:100%; justify-content:space-between; }
   .info-grid { grid-template-columns:90px 1fr; gap:.8rem 0; }
   .detail-text { font-size:1.15rem; }
+  /* stack the media title below the media (horizontal) like the board card meta */
+  .media-frame { flex-direction:column; align-items:flex-end; gap:.6rem; }
+  .media-stage { width:100%; }
+  .media-title-v { writing-mode:horizontal-tb; border-left:none; padding-left:0; text-align:right; }
 }
 
 /* ---------- admin ---------- */
@@ -217,6 +229,16 @@ input, textarea, select { color:var(--text); }
    (no stretching, no letterbox bars). Centered when narrower than the wrapper. */
 .detail-video { display:block; max-width:100%; max-height:calc(100vh - 14rem); width:auto; height:auto; background:#000; }
 .video-tile .doc-ext { opacity:.85; }
+
+/* ---------- custom video controls (on-brand, slow fade on hover) ---------- */
+.vbar { position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:.7rem; padding:.85rem .8rem .7rem; color:#fff; background:linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0)); opacity:0; pointer-events:none; transition:opacity .6s cubic-bezier(.2,.8,.2,1); }
+.media-stage:hover .vbar, .vbar:focus-within { opacity:1; pointer-events:auto; }
+.vbar-btn { display:inline-flex; align-items:center; justify-content:center; background:none; border:none; padding:0; color:inherit; opacity:.8; transition:opacity .3s; cursor:pointer; }
+.vbar-btn:hover { opacity:1; }
+.vbar-btn svg { display:block; }
+.vbar-track { flex:1; height:2px; background:rgba(255,255,255,.28); position:relative; }
+.vbar-fill { position:absolute; inset:0 auto 0 0; width:0; background:#fff; }
+.vbar-time { font-size:.6rem; letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
 
 /* ---------- detail admin controls ---------- */
 .detail-admin { display:flex; gap:1.25rem; align-items:center; margin-top:2rem; padding-top:1.5rem; border-top:1px solid var(--line); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }

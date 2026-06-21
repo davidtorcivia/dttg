@@ -61,6 +61,23 @@
     cols[m].appendChild(card);
     heights[m] = cols[m].offsetHeight;
   }
+  // Blur-up: show the tiny placeholder behind a thumbnail while it loads, then
+  // drop both the placeholder and the dominant-color backdrop once it has loaded.
+  // A card shorter than its meta column would otherwise show that fill in the gap
+  // below the image — leave the page background showing through instead.
+  function blurUp(img) {
+    var c = img && img.parentElement;
+    if (!c) return;
+    var clear = function () { c.style.backgroundImage = 'none'; c.style.backgroundColor = 'transparent'; };
+    if (img.complete && img.naturalWidth) { clear(); return; } // already loaded
+    var ph = img.getAttribute('data-ph');
+    if (ph) {
+      c.style.backgroundImage = 'url("' + ph + '")';
+      c.style.backgroundSize = 'cover';
+      c.style.backgroundPosition = 'center';
+    }
+    img.addEventListener('load', clear);
+  }
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
@@ -100,9 +117,19 @@
     var open = function (e) {
       if (e) e.preventDefault();
       overlay.classList.add('open');
-      // focus() is a no-op while the overlay is still visibility:hidden mid-
-      // transition, so defer one frame until it's actually visible.
-      if (input) { requestAnimationFrame(function () { input.focus(); input.select(); }); }
+      // focus() is a no-op while the overlay is still visibility:hidden (it stays
+      // hidden until the .open style is applied + composited), and we can't know
+      // exactly which frame that lands on — so focus and retry each frame until it
+      // actually sticks, so you can start typing the moment the bar opens.
+      if (input) {
+        var tries = 0;
+        var focusNow = function () {
+          input.focus();
+          if (document.activeElement === input) { input.select(); return; }
+          if (tries++ < 15) requestAnimationFrame(focusNow);
+        };
+        focusNow();
+      }
     };
     var hide = function () { overlay.classList.remove('open'); };
 
@@ -157,8 +184,8 @@
     if (!form || !input || !grid) return;
     var revive = function () {
       grid.querySelectorAll('.card').forEach(function (card) {
-        var img = card.querySelector('img[data-ph]');
-        if (img) { var c = img.parentElement; c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")'; c.style.backgroundSize = 'cover'; c.style.backgroundPosition = 'center'; }
+        var img = card.querySelector('.card-img-container img');
+        if (img) blurUp(img);
         var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
         card.classList.add('visible');
       });
@@ -180,15 +207,60 @@
     input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 200); });
   })();
 
-  // ---- detail video: native controls only while hovered ----
-  // (the video autoplays muted on a loop; controls would otherwise sit on top of
-  // it the whole time). Toggle the attribute since CSS can't hide native controls
-  // cross-browser. Pointer-only — autoplay can auto-focus the video, so keying
-  // off focus would make the controls appear on load.
-  document.querySelectorAll('video.detail-video').forEach(function (v) {
-    v.addEventListener('pointerenter', function () { v.setAttribute('controls', ''); });
-    v.addEventListener('pointerleave', function () { v.removeAttribute('controls'); });
-  });
+  // ---- detail video: custom, on-brand control bar (fades in on hover) ----
+  // (the video autoplays muted on a loop; native controls can't be styled or fade-
+  // timed cross-browser, so we draw our own thin monochrome bar — play/pause, a
+  // scrub line, time, and mute — that fades in/out over the media on hover.)
+  (function () {
+    var SVG = {
+      play:  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 3l9 5-9 5z" fill="currentColor"/></svg>',
+      pause: '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="4" y="3" width="3" height="10" fill="currentColor"/><rect x="9" y="3" width="3" height="10" fill="currentColor"/></svg>',
+      sound: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 5.4a3 3 0 0 1 0 5.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+      muted: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 6l3.2 4M14.2 6L11 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+    };
+    var fmt = function (t) {
+      if (!isFinite(t) || t < 0) t = 0;
+      var m = Math.floor(t / 60), s = Math.floor(t % 60);
+      return m + ':' + (s < 10 ? '0' : '') + s;
+    };
+    document.querySelectorAll('video.detail-video').forEach(function (v) {
+      var stage = v.parentElement;
+      if (!stage) return;
+      var bar = document.createElement('div');
+      bar.className = 'vbar';
+      bar.innerHTML =
+        '<button type="button" class="vbar-btn vbar-play" aria-label="Play / pause"></button>' +
+        '<div class="vbar-track"><div class="vbar-fill"></div></div>' +
+        '<span class="vbar-time">0:00</span>' +
+        '<button type="button" class="vbar-btn vbar-mute" aria-label="Mute / unmute"></button>';
+      stage.appendChild(bar);
+      var playBtn = bar.querySelector('.vbar-play');
+      var muteBtn = bar.querySelector('.vbar-mute');
+      var track = bar.querySelector('.vbar-track');
+      var fill = bar.querySelector('.vbar-fill');
+      var timeEl = bar.querySelector('.vbar-time');
+
+      var syncPlay = function () { playBtn.innerHTML = v.paused ? SVG.play : SVG.pause; };
+      var syncMute = function () { muteBtn.innerHTML = v.muted ? SVG.muted : SVG.sound; };
+      playBtn.addEventListener('click', function () { if (v.paused) { v.play(); } else { v.pause(); } });
+      muteBtn.addEventListener('click', function () { v.muted = !v.muted; syncMute(); });
+      v.addEventListener('play', syncPlay);
+      v.addEventListener('pause', syncPlay);
+      v.addEventListener('volumechange', syncMute);
+      v.addEventListener('timeupdate', function () {
+        var d = v.duration || 0;
+        fill.style.width = d ? (v.currentTime / d * 100) + '%' : '0';
+        timeEl.textContent = fmt(v.currentTime) + (d ? ' / ' + fmt(d) : '');
+      });
+      track.addEventListener('click', function (e) {
+        var r = track.getBoundingClientRect();
+        var frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+        if (v.duration) v.currentTime = frac * v.duration;
+      });
+      syncPlay();
+      syncMute();
+    });
+  })();
 
   // ---- detail prev/next keyboard nav (arrow keys) ----
   (function () {
@@ -231,13 +303,7 @@
   });
 
   // ---- blur-up placeholders (tiny base64 image scaled to cover) ----
-  document.querySelectorAll('img[data-ph]').forEach(function (img) {
-    var c = img.parentElement;
-    if (!c) return;
-    c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")';
-    c.style.backgroundSize = 'cover';
-    c.style.backgroundPosition = 'center';
-  });
+  document.querySelectorAll('.card-img-container img').forEach(blurUp);
 
   // ---- staggered card entrance ----
   var cards = document.querySelectorAll('.card');
@@ -344,10 +410,11 @@
 
   // ---- detail media: fit to viewport + "expand full size" ----
   (function () {
-    var media = document.querySelector('.image-wrapper > img.zoomable, .image-wrapper > video.detail-video');
+    var media = document.querySelector('.image-wrapper img.zoomable, .image-wrapper video.detail-video');
     if (!media) return;
     var wrap = media.closest('.image-wrapper');
     var btn = document.getElementById('expand-full');
+    var vtitle = wrap && wrap.querySelector('.media-title-v');
     var expanded = false;
 
     // Cap the media's height so it + the caption/expand link fit on screen without
@@ -375,7 +442,15 @@
       btn.hidden = !(media.clientWidth && bigger);
     };
 
-    var refresh = function () { fit(); syncBtn(); fit(); }; // 2nd pass accounts for the button's height
+    // Match the vertical title strip's height to the media so its border runs the
+    // full side of the image (and a long title clips rather than stretching it).
+    var syncTitle = function () {
+      if (!vtitle) return;
+      var vertical = getComputedStyle(vtitle).writingMode.indexOf('vertical') === 0;
+      vtitle.style.height = vertical ? media.clientHeight + 'px' : '';
+    };
+
+    var refresh = function () { fit(); syncBtn(); fit(); syncTitle(); }; // 2nd pass accounts for the button's height
 
     if (media.tagName === 'IMG' && !(media.complete && media.naturalWidth)) {
       media.addEventListener('load', refresh);
@@ -448,8 +523,8 @@
         tmp.innerHTML = html;
         var added = tmp.querySelectorAll('.card');
         added.forEach(function (card) {
-          var img = card.querySelector('img[data-ph]');
-          if (img) { var c = img.parentElement; c.style.backgroundImage = 'url("' + img.getAttribute('data-ph') + '")'; c.style.backgroundSize = 'cover'; c.style.backgroundPosition = 'center'; }
+          var img = card.querySelector('.card-img-container img');
+          if (img) blurUp(img);
           var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
           card.classList.add('visible');
           masonryAppend(grid, card);
