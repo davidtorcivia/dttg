@@ -58,6 +58,7 @@ type pageData struct {
 	BoardColumns   int           // masonry columns on wide screens (3 or 4)
 	JSONLD         template.HTML // detail page: schema.org structured data (already JSON-escaped)
 	Nonce          string        // per-request CSP nonce for inline <script> tags
+	CSRFToken      string        // session-bound token for admin POST forms
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
@@ -101,6 +102,8 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		if ts, _ := s.store.GetSetting(r.Context(), "tracking_script"); ts != "" {
 			pd.TrackingScript = template.HTML(injectNonce(ts, nonce)) //nolint:gosec // admin-provided, trusted
 		}
+	} else if c, err := r.Cookie(sessionCookie); err == nil {
+		pd.CSRFToken = s.csrfToken(c.Value) // for admin POST forms
 	}
 	return pd
 }

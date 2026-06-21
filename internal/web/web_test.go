@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"donottouchtheglass/internal/config"
 	"donottouchtheglass/internal/media"
@@ -219,6 +221,35 @@ func TestLoginLimiter(t *testing.T) {
 	l.reset(key)
 	if blocked, _ := l.blocked(key); blocked {
 		t.Fatal("still blocked after reset")
+	}
+}
+
+func TestCSRF(t *testing.T) {
+	s := newTestServer(t)
+	sid := "test-session"
+	if err := s.store.CreateSession(context.Background(), sid, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+
+	// POST without a token is rejected
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("logout without CSRF token = %d, want 403", rec.Code)
+	}
+
+	// POST with the session-bound token succeeds
+	form := url.Values{"csrf_token": {s.csrfToken(sid)}}
+	req2 := httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader(form.Encode()))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req2.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusSeeOther {
+		t.Errorf("logout with valid CSRF token = %d, want 303", rec2.Code)
 	}
 }
 

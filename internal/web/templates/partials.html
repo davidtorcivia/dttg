@@ -69,10 +69,12 @@
   <a href="/admin/new">+ New</a>
   <a href="/admin/settings">Settings</a>
   <a href="/">View site</a>
-  <form method="POST" action="/logout"><button type="submit">Logout</button></form>
+  <form method="POST" action="/logout">{{template "csrf" .}}<button type="submit">Logout</button></form>
 </div>
 {{end}}
 {{end}}
+
+{{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{end}}
 
 {{define "tail"}}
 <script nonce="{{.Nonce}}" src="{{asset "/static/js/app.js"}}"></script>

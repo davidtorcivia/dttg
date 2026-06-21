@@ -2,12 +2,48 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"log"
 	"net/http"
 	"strings"
 )
+
+// csrfToken derives a per-session CSRF token (HMAC of the session id), so no
+// extra storage is needed and it's bound to the logged-in session.
+func (s *Server) csrfToken(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.csrfKey)
+	mac.Write([]byte(sessionID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// validCSRF checks the submitted csrf_token against the session-bound token.
+func (s *Server) validCSRF(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	want := s.csrfToken(c.Value)
+	got := r.FormValue("csrf_token")
+	return want != "" && got != "" && hmac.Equal([]byte(got), []byte(want))
+}
+
+// csrf rejects state-changing POSTs that lack a valid session-bound token (the
+// session cookie is SameSite=Lax, so this is defense-in-depth).
+func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && !s.validCSRF(r) {
+			http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
 
 type nonceKey struct{}
 

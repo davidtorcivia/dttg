@@ -2,12 +2,14 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"donottouchtheglass/internal/store"
 
@@ -23,6 +25,45 @@ const (
 	ogW = 1200
 	ogH = 630
 )
+
+// ogCache is a tiny FIFO cache of rendered OG cards so a shared/viral link doesn't
+// re-render (DB read + decode + draw + JPEG encode) on every request. Validated by
+// the item's updated-at, so an edit invalidates the entry.
+type ogCacheEntry struct {
+	updated int64
+	data    []byte
+}
+
+type ogCache struct {
+	mu    sync.Mutex
+	max   int
+	m     map[int64]ogCacheEntry
+	order []int64
+}
+
+func newOGCache(max int) *ogCache { return &ogCache{max: max, m: map[int64]ogCacheEntry{}} }
+
+func (c *ogCache) get(id, updated int64) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.m[id]; ok && e.updated == updated {
+		return e.data, true
+	}
+	return nil, false
+}
+
+func (c *ogCache) put(id, updated int64, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.m[id]; !exists {
+		c.order = append(c.order, id)
+		if len(c.order) > c.max {
+			delete(c.m, c.order[0])
+			c.order = c.order[1:]
+		}
+	}
+	c.m[id] = ogCacheEntry{updated: updated, data: data}
+}
 
 var ogBoldFont, ogRegFont *opentype.Font
 
@@ -48,21 +89,39 @@ func (s *Server) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	var cover image.Image
-	if it.CoverKey != "" {
-		if rc, e := s.media.Open(it.CoverKey); e == nil {
-			cover, _ = imaging.Decode(rc, imaging.AutoOrientation(true))
-			_ = rc.Close()
-		}
-	}
-	var buf bytes.Buffer
-	if err := imaging.Encode(&buf, s.renderOGCard(*it, cover), imaging.JPEG, imaging.JPEGQuality(88)); err != nil {
-		s.serverError(w, r, err)
+	updated := it.UpdatedAt.Unix()
+	etag := fmt.Sprintf(`"og-%d-%d"`, id, updated)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
 		return
+	}
+
+	var data []byte
+	if s.ogCache != nil {
+		data, _ = s.ogCache.get(id, updated)
+	}
+	if data == nil {
+		var cover image.Image
+		if it.CoverKey != "" {
+			if rc, e := s.media.Open(it.CoverKey); e == nil {
+				cover, _ = imaging.Decode(rc, imaging.AutoOrientation(true))
+				_ = rc.Close()
+			}
+		}
+		var buf bytes.Buffer
+		if err := imaging.Encode(&buf, s.renderOGCard(*it, cover), imaging.JPEG, imaging.JPEGQuality(88)); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		data = buf.Bytes()
+		if s.ogCache != nil {
+			s.ogCache.put(id, updated, data)
+		}
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_, _ = w.Write(buf.Bytes())
+	w.Header().Set("ETag", etag)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {

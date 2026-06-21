@@ -9,7 +9,7 @@
   <div class="admin admin-form">
     <h1>Settings</h1>
 
-    <form method="POST" action="/admin/settings">
+    <form method="POST" action="/admin/settings">{{template "csrf" .}}
       <label>Board columns (wide screens)
         <span>Masonry columns on wide screens. 4 packs items smaller; narrower screens step down automatically. Default 3.</span>
         <select name="board_columns">
@@ -32,7 +32,7 @@
         {{if .Settings.Backup.Last.IsZero}}No backup taken yet this session.{{else}}Last backup: {{longDate .Settings.Backup.Last}} · {{.Settings.Backup.Count}} this session.{{end}}
       </p>
       {{if .Settings.Backup.Err}}<p class="login-error">Last error: {{.Settings.Backup.Err}}</p>{{end}}
-      <form method="POST" action="/admin/backup"><button type="submit" class="btn">Back up now</button></form>
+      <form method="POST" action="/admin/backup">{{template "csrf" .}}<button type="submit" class="btn">Back up now</button></form>
       {{else}}
       <p class="muted">Backups are not configured. Set <code>R2_*</code> credentials and <code>R2_BACKUP_BUCKET</code> to enable rolling DB snapshots.</p>
       {{end}}

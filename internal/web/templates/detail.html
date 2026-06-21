@@ -94,7 +94,7 @@
       {{- if .IsAdmin}}
       <div class="detail-admin">
         <a href="/admin/items/{{.Item.ID}}/edit">Edit</a>
-        <form method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')"><button type="submit">Delete</button></form>
+        <form method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')">{{template "csrf" .}}<button type="submit">Delete</button></form>
       </div>
       {{- end}}
 

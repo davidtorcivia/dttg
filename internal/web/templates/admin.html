@@ -27,7 +27,7 @@
           <td>{{shortDate .CreatedAt}}</td>
           <td class="admin-actions">
             <a href="/admin/items/{{.ID}}/edit">edit</a>
-            <form method="POST" action="/admin/items/{{.ID}}/delete" onsubmit="return confirm('Delete item {{.ID}}?')"><button type="submit">delete</button></form>
+            <form method="POST" action="/admin/items/{{.ID}}/delete" onsubmit="return confirm('Delete item {{.ID}}?')">{{template "csrf" $}}<button type="submit">delete</button></form>
           </td>
         </tr>
         {{- else}}

@@ -4,9 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// embedHostAllow is the set of hosts whose oEmbed iframes we trust.
+var embedHostAllow = []string{"youtube.com", "youtube-nocookie.com", "youtu.be", "player.vimeo.com", "vimeo.com"}
+
+var iframeSrcRe = regexp.MustCompile(`(?i)<iframe[^>]*\ssrc=["']([^"']+)["']`)
+
+// sanitizeEmbedHTML reduces oEmbed HTML to a single minimal iframe whose src is on
+// the allowlist — so we never store/serve arbitrary provider HTML. Returns "" if
+// no allowlisted iframe is found (the caller decides how to fall back). The
+// .embed-wrap CSS sizes the iframe, so width/height are dropped.
+func sanitizeEmbedHTML(raw string) string {
+	m := iframeSrcRe.FindStringSubmatch(raw)
+	if len(m) < 2 {
+		return ""
+	}
+	src := m[1]
+	u, err := url.Parse(src)
+	if err != nil || u.Scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	allowed := false
+	for _, h := range embedHostAllow {
+		if host == h || strings.HasSuffix(host, "."+h) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return ""
+	}
+	return `<iframe src="` + html.EscapeString(src) + `" loading="lazy" ` +
+		`referrerpolicy="strict-origin-when-cross-origin" ` +
+		`allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`
+}
 
 type embedInfo struct {
 	Provider     string
@@ -54,5 +91,9 @@ func (s *Service) fetchEmbed(ctx context.Context, rawurl, provider string) (*emb
 	if err := json.Unmarshal(res.Body, &data); err != nil {
 		return nil, err
 	}
-	return &embedInfo{Provider: provider, HTML: data.HTML, ThumbnailURL: data.ThumbnailURL, Title: data.Title}, nil
+	clean := sanitizeEmbedHTML(data.HTML)
+	if clean == "" {
+		clean = data.HTML // trusted provider, unexpected markup — keep it (CSP frame-src still constrains)
+	}
+	return &embedInfo{Provider: provider, HTML: clean, ThumbnailURL: data.ThumbnailURL, Title: data.Title}, nil
 }

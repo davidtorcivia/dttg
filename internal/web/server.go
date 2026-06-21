@@ -3,6 +3,7 @@
 package web
 
 import (
+	"crypto/rand"
 	"embed"
 	"fmt"
 	"hash/fnv"
@@ -37,6 +38,8 @@ type Server struct {
 	tmpl    *template.Template
 	weather weatherCache
 	loginRL *loginLimiter
+	ogCache *ogCache
+	csrfKey []byte
 }
 
 // parseTemplates builds the template set with the shared FuncMap. Extracted from
@@ -69,7 +72,9 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 	_ = mime.AddExtensionType(".webp", "image/webp")
 	_ = mime.AddExtensionType(".pdf", "application/pdf")
 
-	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl, loginRL: newLoginLimiter()}
+	csrfKey := make([]byte, 32)
+	_, _ = rand.Read(csrfKey)
+	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl, loginRL: newLoginLimiter(), ogCache: newOGCache(256), csrfKey: csrfKey}
 	s.startWeather()
 	return s, nil
 }
@@ -117,8 +122,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
 
 	mux.HandleFunc("GET /login", s.handleLoginForm)
-	mux.HandleFunc("POST /login", s.handleLoginSubmit)
-	mux.HandleFunc("POST /logout", s.handleLogout)
+	mux.HandleFunc("POST /login", s.handleLoginSubmit) // no CSRF: no session yet (login CSRF is benign)
+	mux.HandleFunc("POST /logout", s.csrf(s.handleLogout))
 
 	// API (bearer-token auth) — used by the extension + bookmarklet (M4).
 	// CORS-enabled so the browser extension can call them cross-origin; OPTIONS
@@ -133,16 +138,17 @@ func (s *Server) Handler() http.Handler {
 	// Admin (session auth)
 	mux.HandleFunc("GET /admin", s.requireAdmin(s.handleAdminDashboard))
 	mux.HandleFunc("GET /admin/new", s.requireAdmin(s.handleAdminNew))
-	mux.HandleFunc("POST /admin/items", s.requireAdmin(s.handleAdminCreate))
+	mux.HandleFunc("POST /admin/items", s.requireAdmin(s.csrf(s.handleAdminCreate)))
 	mux.HandleFunc("GET /admin/items/{id}/edit", s.requireAdmin(s.handleAdminEdit))
-	mux.HandleFunc("POST /admin/items/{id}", s.requireAdmin(s.handleAdminUpdate))
-	mux.HandleFunc("POST /admin/items/{id}/media", s.requireAdmin(s.handleAdminReplaceMedia))
-	mux.HandleFunc("POST /admin/items/{id}/delete", s.requireAdmin(s.handleAdminDelete))
+	mux.HandleFunc("POST /admin/items/{id}", s.requireAdmin(s.csrf(s.handleAdminUpdate)))
+	mux.HandleFunc("POST /admin/items/{id}/media", s.requireAdmin(s.csrf(s.handleAdminReplaceMedia)))
+	mux.HandleFunc("POST /admin/items/{id}/delete", s.requireAdmin(s.csrf(s.handleAdminDelete)))
 	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleAdminSettings))
-	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.handleAdminSettingsSave))
-	mux.HandleFunc("POST /admin/backup", s.requireAdmin(s.handleAdminBackup))
+	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.csrf(s.handleAdminSettingsSave)))
+	mux.HandleFunc("POST /admin/backup", s.requireAdmin(s.csrf(s.handleAdminBackup)))
 
-	// PWA share target (the installed app posts shared content here)
+	// PWA share target — the OS share sheet posts here without a CSRF token, so it's
+	// not csrf-wrapped; it's same-origin (manifest-registered) + session-gated.
 	mux.HandleFunc("POST /share", s.requireAdmin(s.handleShare))
 
 	return logRequests(s.securityHeaders(s.recoverPanic(mux)))

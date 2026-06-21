@@ -9,6 +9,7 @@
   <div class="admin admin-form">
     <h1>New item</h1>
     <form method="POST" action="/admin/items" enctype="multipart/form-data">
+      {{template "csrf" .}}
       <label>URL <span>(image, link, document, or YouTube/Vimeo — kind is auto-detected)</span>
         <input type="url" name="url" placeholder="https://…" value="{{with .Prefill}}{{.URL}}{{end}}">
       </label>

@@ -16,6 +16,7 @@
         {{- if .Item.SourceURL}}<p class="muted"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{.Item.SourceURL}}</a></p>{{end}}
         {{- if ne .Item.Kind "text"}}
         <form class="replace-media" method="POST" action="/admin/items/{{.Item.ID}}/media" enctype="multipart/form-data">
+          {{template "csrf" .}}
           <label>Replace file <span>(image, document, or video)</span></label>
           <input type="file" name="file" accept="image/*,application/pdf,video/*" required>
           <button type="submit">Upload &amp; replace</button>
@@ -23,6 +24,7 @@
         {{- end}}
       </div>
       <form method="POST" action="/admin/items/{{.Item.ID}}">
+        {{template "csrf" .}}
         <label>Title
           <input type="text" name="title" value="{{.Item.Title}}">
         </label>
@@ -49,6 +51,7 @@
       </form>
     </div>
     <form class="danger" method="POST" action="/admin/items/{{.Item.ID}}/delete" onsubmit="return confirm('Delete item {{.Item.ID}}? This removes its media too.')">
+      {{template "csrf" .}}
       <button type="submit">Delete item</button>
     </form>
   </div>
