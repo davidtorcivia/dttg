@@ -224,9 +224,9 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 
 			mediaRows = append(mediaRows,
 				store.Media{Variant: "original", StorageKey: origKey, ContentType: imageCT, Bytes: int64(len(imageBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
-				store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: true, OnR2: s.media.Mirrors(fullKey)},
-				store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: true, OnR2: s.media.Mirrors(thumbKey)},
-				store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: true, OnR2: s.media.Mirrors(smallKey)},
+				store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: !s.media.Mirrors(fullKey), OnR2: s.media.Mirrors(fullKey)},
+				store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: !s.media.Mirrors(thumbKey), OnR2: s.media.Mirrors(thumbKey)},
+				store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: !s.media.Mirrors(smallKey), OnR2: s.media.Mirrors(smallKey)},
 			)
 		} else if kind == "image" && in.URL != "" {
 			it.CoverRemoteURL = in.URL // processing failed; degrade to remote display
@@ -358,9 +358,9 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		next.Width, next.Height = proc.Width, proc.Height
 		mediaRows = append(mediaRows,
 			store.Media{Variant: "original", StorageKey: origKey, ContentType: ct, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
-			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: true, OnR2: s.media.Mirrors(fullKey)},
-			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: true, OnR2: s.media.Mirrors(thumbKey)},
-			store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: true, OnR2: s.media.Mirrors(smallKey)},
+			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: !s.media.Mirrors(fullKey), OnR2: s.media.Mirrors(fullKey)},
+			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: !s.media.Mirrors(thumbKey), OnR2: s.media.Mirrors(thumbKey)},
+			store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: !s.media.Mirrors(smallKey), OnR2: s.media.Mirrors(smallKey)},
 		)
 
 	case strings.HasPrefix(ct, "video/"):

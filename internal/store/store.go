@@ -732,7 +732,7 @@ func (s *Store) ListUnmirroredMedia(ctx context.Context) ([]Media, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id,item_id,variant,storage_key,content_type,width,height,bytes,on_local,on_r2
 		FROM media
-		WHERE on_r2=0 AND on_local=1 AND variant IN ('full','thumb')
+		WHERE on_r2=0 AND on_local=1 AND variant IN ('full','thumb','small')
 		ORDER BY id`)
 	if err != nil {
 		return nil, err

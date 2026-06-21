@@ -69,7 +69,7 @@ func backfillVariants(ctx context.Context, st *store.Store, ms media.Store) erro
 		}
 		if _, err := st.AddMedia(ctx, store.Media{
 			ItemID: it.ID, Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg",
-			Bytes: int64(len(proc.SmallJPEG)), OnLocal: true, OnR2: ms.Mirrors(smallKey),
+			Bytes: int64(len(proc.SmallJPEG)), OnLocal: !ms.Mirrors(smallKey), OnR2: ms.Mirrors(smallKey),
 		}); err != nil {
 			log.Printf("item %d: add media: %v", it.ID, err)
 			skipped++
