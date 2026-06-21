@@ -105,6 +105,42 @@ func TestSettingsRoundtrip(t *testing.T) {
 	}
 }
 
+func TestSearch(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	id1, _ := st.CreateItem(ctx, Item{Kind: "image", Title: "Long exposure night", Visibility: "public"})
+	_, _ = st.CreateItem(ctx, Item{Kind: "text", Title: "Daytime study", Note: "bright sunlight", Visibility: "public"})
+
+	// FTS prefix match on title
+	if res, err := st.SearchItems(ctx, "expos", false); err != nil {
+		t.Fatal(err)
+	} else if len(res) != 1 || res[0].ID != id1 {
+		t.Fatalf("search 'expos' returned %d results", len(res))
+	}
+	// match in note
+	if res, _ := st.SearchItems(ctx, "sunlight", false); len(res) != 1 {
+		t.Errorf("search 'sunlight' = %d, want 1", len(res))
+	}
+	// no match
+	if res, _ := st.SearchItems(ctx, "zzzznotfound", false); len(res) != 0 {
+		t.Errorf("nonsense search = %d, want 0", len(res))
+	}
+	// punctuation-only query must not error (LIKE fallback)
+	if _, err := st.SearchItems(ctx, "!!!", false); err != nil {
+		t.Errorf("punctuation query errored: %v", err)
+	}
+	// update keeps the FTS index in sync
+	if err := st.UpdateItem(ctx, id1, "Renamed moonrise", "", "", 0, "public"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if res, _ := st.SearchItems(ctx, "exposure", false); len(res) != 0 {
+		t.Errorf("stale FTS row after update: %d results for old title", len(res))
+	}
+	if res, _ := st.SearchItems(ctx, "moonrise", false); len(res) != 1 {
+		t.Errorf("FTS not updated: %d results for new title", len(res))
+	}
+}
+
 func TestSessions(t *testing.T) {
 	st := openTest(t)
 	ctx := context.Background()

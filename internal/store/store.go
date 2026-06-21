@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -387,9 +388,70 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 	return out, rows.Err()
 }
 
-// SearchItems does a simple case-insensitive LIKE search across an item's text
-// fields, category name, and tag names.
+// ftsQuery turns a user query into a safe FTS5 MATCH expression: alphanumeric
+// terms with a trailing * for prefix matching. Returns "" if there are no usable
+// terms (caller falls back to LIKE).
+func ftsQuery(query string) string {
+	var terms []string
+	for _, f := range strings.Fields(query) {
+		clean := strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsNumber(r) {
+				return unicode.ToLower(r)
+			}
+			return -1
+		}, f)
+		if clean != "" {
+			terms = append(terms, clean+"*")
+		}
+	}
+	return strings.Join(terms, " ")
+}
+
+// SearchItems uses the FTS5 index for item text (fast + prefix matching) and a
+// LIKE for category/tag names, falling back to a full LIKE scan if FTS is
+// unavailable or the query has no indexable terms.
 func (s *Store) SearchItems(ctx context.Context, query string, includePrivate bool) ([]Item, error) {
+	match := ftsQuery(query)
+	if match == "" {
+		return s.searchItemsLike(ctx, query, includePrivate)
+	}
+	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
+	q := `SELECT` + itemColumns + `
+		FROM items i
+		LEFT JOIN categories c ON c.id = i.category_id
+		WHERE `
+	if !includePrivate {
+		q += "i.visibility='public' AND "
+	}
+	q += `(
+		i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?) OR
+		lower(c.name) LIKE ? OR
+		i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id=it.tag_id WHERE lower(t.name) LIKE ?)
+	)
+	ORDER BY i.created_at DESC, i.id DESC
+	LIMIT 200`
+	rows, err := s.db.QueryContext(ctx, q, match, like, like)
+	if err != nil {
+		return s.searchItemsLike(ctx, query, includePrivate) // FTS unavailable/malformed
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return s.searchItemsLike(ctx, query, includePrivate)
+	}
+	return out, nil
+}
+
+// searchItemsLike is the case-insensitive LIKE scan across an item's text fields,
+// category name, and tag names (the fallback for SearchItems).
+func (s *Store) searchItemsLike(ctx context.Context, query string, includePrivate bool) ([]Item, error) {
 	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
 	q := `SELECT` + itemColumns + `
 		FROM items i
