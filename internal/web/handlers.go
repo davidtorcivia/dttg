@@ -29,9 +29,9 @@ type itemView struct {
 // metaTags drives SEO / Open Graph / Twitter Card output.
 type metaTags struct {
 	Description string
-	Image      string // absolute URL
-	URL        string // canonical absolute URL
-	Type       string // website | article
+	Image       string // absolute URL
+	URL         string // canonical absolute URL
+	Type        string // website | article
 }
 
 type pageData struct {
@@ -44,22 +44,23 @@ type pageData struct {
 	Error          string
 	Items          []itemView
 	Item           *itemView
-	TagsCSV        string        // edit form: current tags as comma-separated text
-	SearchQuery    string        // search page: current query
-	TrackingScript template.HTML // analytics snippet injected on public pages
-	Settings       *settingsView // admin settings page
-	Prefill        *newItemForm  // admin "new" form prefill (bookmarklet/query)
-	Meta           metaTags      // SEO / OG tags
-	PrevURL        string        // detail page: newer item
-	NextURL        string        // detail page: older item
-	Related        []itemView    // detail page: related items
-	Stats          *store.Stats  // board footer / colophon
-	ColorScheme    string        // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
-	ThemeAttr      string        // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
-	BoardColumns   int           // masonry columns on wide screens (3 or 4)
-	JSONLD         template.HTML // detail page: schema.org structured data (already JSON-escaped)
-	Nonce          string        // per-request CSP nonce for inline <script> tags
-	CSRFToken      string        // session-bound token for admin POST forms
+	TagsCSV        string             // edit form: current tags as comma-separated text
+	SearchQuery    string             // search page: current query
+	TrackingScript template.HTML      // analytics snippet injected on public pages
+	Settings       *settingsView      // admin settings page
+	Prefill        *newItemForm       // admin "new" form prefill (bookmarklet/query)
+	Meta           metaTags           // SEO / OG tags
+	PrevURL        string             // detail page: newer item
+	NextURL        string             // detail page: older item
+	Related        []itemView         // detail page: related items
+	Stats          *store.Stats       // board footer / colophon
+	ColorScheme    string             // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
+	ThemeAttr      string             // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
+	BoardColumns   int                // masonry columns on wide screens (3 or 4)
+	JSONLD         template.HTML      // detail page: schema.org structured data (already JSON-escaped)
+	Nonce          string             // per-request CSP nonce for inline <script> tags
+	CSRFToken      string             // session-bound token for admin POST forms
+	Maintenance    *maintenanceReport // admin maintenance/orphan scan
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)

@@ -77,3 +77,14 @@ func (r *R2Store) Delete(ctx context.Context, key string) error {
 }
 
 func (r *R2Store) Mirrors(string) bool { return true }
+
+func (r *R2Store) List(ctx context.Context) ([]ObjectInfo, error) {
+	var out []ObjectInfo
+	for obj := range r.client.ListObjects(ctx, r.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if obj.Err != nil {
+			return out, obj.Err
+		}
+		out = append(out, ObjectInfo{Key: obj.Key, Size: obj.Size})
+	}
+	return out, nil
+}

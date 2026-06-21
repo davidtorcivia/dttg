@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en"{{if .ThemeAttr}} data-theme="{{.ThemeAttr}}"{{end}}>
+<head>
+  <title>Maintenance — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <div class="admin admin-form">
+    <h1>Maintenance</h1>
+    {{- with .Maintenance}}
+    {{- if .ScanError}}
+    <p class="login-error">Scan failed: {{.ScanError}}</p>
+    <p class="muted">Nothing was changed. If R2 is configured, check its credentials/connectivity and try again.</p>
+    <a href="/admin/settings" class="back-btn">&larr; Back to settings</a>
+    {{- else if .Empty}}
+    <p class="muted">Storage and the database are consistent — nothing to clean. ✓</p>
+    <a href="/admin/settings" class="back-btn">&larr; Back to settings</a>
+    {{- else}}
+    <p class="muted">A dry run — nothing is deleted until you confirm at the bottom.</p>
+
+    <div class="settings-section">
+      <h2>Orphaned media files — {{len .OrphanFiles}} · {{filesize .OrphanBytes}}</h2>
+      <p class="muted">Blobs in storage (local + R2) that no item references — usually leftovers from interrupted ingests.</p>
+      {{- if .OrphanFiles}}
+      <ul class="maint-list">
+        {{- range .OrphanFiles}}<li><code>{{.Key}}</code> <span class="muted">{{filesize .Size}}</span></li>{{end}}
+      </ul>
+      {{- end}}
+    </div>
+
+    <div class="settings-section">
+      <h2>Broken items — {{len .BrokenItems}}</h2>
+      <p class="muted">Items whose primary media is missing from storage. Cleanup deletes these items (and any remaining blobs/rows).</p>
+      {{- if .BrokenItems}}
+      <ul class="maint-list">
+        {{- range .BrokenItems}}<li>{{pad3 .ID}} — {{if .Title}}{{.Title}}{{else}}(untitled {{.Kind}}){{end}} · <a href="/admin/items/{{.ID}}/edit">edit</a></li>{{end}}
+      </ul>
+      {{- end}}
+    </div>
+
+    <div class="settings-section">
+      <h2>Stray media rows — {{len .StrayRows}}</h2>
+      <p class="muted">Database rows pointing at an item that no longer exists.</p>
+    </div>
+
+    <div class="danger">
+      <form method="POST" action="/admin/maintenance/cleanup" onsubmit="return confirm('Permanently delete {{len .OrphanFiles}} orphan files, {{len .BrokenItems}} broken items, and {{len .StrayRows}} stray rows? This cannot be undone.')">{{template "csrf" $}}
+        <button type="submit">Delete everything above</button>
+      </form>
+      <p style="margin-top:1.25rem"><a href="/admin/settings" class="back-btn">&larr; Back to settings</a></p>
+    </div>
+    {{- end}}
+    {{- end}}
+  </div>
+  {{template "tail" .}}
+</body>
+</html>

@@ -100,6 +100,35 @@ func (m *MirrorStore) Delete(ctx context.Context, key string) error {
 	return err
 }
 
+// List merges local + R2 objects (deduped by key) so the orphan scan sees every
+// stored blob regardless of which tier holds it.
+func (m *MirrorStore) List(ctx context.Context) ([]ObjectInfo, error) {
+	seen := map[string]ObjectInfo{}
+	loc, err := m.local.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range loc {
+		seen[o.Key] = o
+	}
+	if m.r2 != nil {
+		r2o, err := m.r2.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range r2o {
+			if _, ok := seen[o.Key]; !ok {
+				seen[o.Key] = o
+			}
+		}
+	}
+	out := make([]ObjectInfo, 0, len(seen))
+	for _, o := range seen {
+		out = append(out, o)
+	}
+	return out, nil
+}
+
 // OpenLocal / PutR2 support the reconcile/backfill job (push local-only refined
 // variants up to R2 once it is configured).
 func (m *MirrorStore) OpenLocal(key string) (io.ReadCloser, error) { return m.local.Open(key) }

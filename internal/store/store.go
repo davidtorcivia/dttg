@@ -780,6 +780,60 @@ func (s *Store) ListMediaForItem(ctx context.Context, itemID int64) ([]Media, er
 	return out, rows.Err()
 }
 
+// AllMedia returns every media row (used by the orphan scan to know which storage
+// keys are referenced).
+func (s *Store) AllMedia(ctx context.Context) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id,item_id,variant,storage_key,content_type,width,height,bytes,on_local,on_r2
+		FROM media`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Media
+	for rows.Next() {
+		var m Media
+		var onLocal, onR2 int
+		if err := rows.Scan(&m.ID, &m.ItemID, &m.Variant, &m.StorageKey, &m.ContentType,
+			&m.Width, &m.Height, &m.Bytes, &onLocal, &onR2); err != nil {
+			return nil, err
+		}
+		m.OnLocal, m.OnR2 = onLocal == 1, onR2 == 1
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// StrayMediaRows returns media rows whose parent item no longer exists (the FK
+// cascade should prevent these, but the scan reports/cleans any that slip through).
+func (s *Store) StrayMediaRows(ctx context.Context) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id,m.item_id,m.variant,m.storage_key,m.content_type,m.width,m.height,m.bytes,m.on_local,m.on_r2
+		FROM media m LEFT JOIN items i ON i.id=m.item_id WHERE i.id IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Media
+	for rows.Next() {
+		var m Media
+		var onLocal, onR2 int
+		if err := rows.Scan(&m.ID, &m.ItemID, &m.Variant, &m.StorageKey, &m.ContentType,
+			&m.Width, &m.Height, &m.Bytes, &onLocal, &onR2); err != nil {
+			return nil, err
+		}
+		m.OnLocal, m.OnR2 = onLocal == 1, onR2 == 1
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// DeleteMediaRow removes a single media row by id (used to clear stray rows).
+func (s *Store) DeleteMediaRow(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM media WHERE id=?`, id)
+	return err
+}
+
 // GetAdjacent returns the ids of the newer (prev) and older (next) items
 // relative to it within the board ordering (created_at DESC, id DESC). Returns 0
 // for either end. Respects visibility unless includePrivate.

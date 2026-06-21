@@ -146,6 +146,9 @@
     document.body.addEventListener('mouseover', function (e) {
       var hot = e.target.closest('a, button, img, .card');
       cursor.classList.toggle('hovering', !!hot);
+      // over a text field the native I-beam shows — hide the blend dot so they
+      // don't stack into a weird circle-plus-caret.
+      cursor.classList.toggle('cursor-hidden', !!e.target.closest('input, textarea, select, [contenteditable]'));
     });
   }
 

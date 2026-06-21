@@ -136,6 +136,8 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
   input, textarea, select { cursor:auto; }
   .cursor { position:fixed; top:0; left:0; width:12px; height:12px; background:var(--text); border-radius:50%; pointer-events:none; transform:translate(-50%,-50%); z-index:10000; transition:width .3s cubic-bezier(.2,.8,.2,1), height .3s cubic-bezier(.2,.8,.2,1), background-color .3s; mix-blend-mode:difference; }
   .cursor.hovering { width:60px; height:60px; background:rgba(255,255,255,.8); }
+  /* in text fields the native I-beam shows — hide the blend dot so they don't stack */
+  .cursor.cursor-hidden { opacity:0; }
 }
 
 /* ---------- detail reveal ---------- */
@@ -209,6 +211,10 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .replace-media label span { text-transform:none; letter-spacing:0; color:var(--faint); }
 .replace-media input[type=file] { display:block; width:100%; font:inherit; font-size:.7rem; color:var(--muted); margin:.6rem 0 .9rem; }
 .replace-media button { background:var(--text); color:var(--bg); border:none; padding:.5rem 1rem; font:inherit; font-size:.6rem; text-transform:uppercase; letter-spacing:.1em; cursor:pointer; }
+.maint-list { list-style:none; margin:.6rem 0 0; padding:0; font-size:.8rem; line-height:1.9; max-height:42vh; overflow:auto; }
+.maint-list code { font-size:.85em; word-break:break-all; }
+.maint-list a { color:var(--faint); text-decoration:none; border-bottom:1px solid transparent; }
+.maint-list a:hover { color:var(--text); border-color:var(--text); }
 .danger { margin-top:3rem; padding-top:1.5rem; border-top:1px solid var(--line); }
 .danger button { background:none; border:1px solid var(--line); color:#c0392b; padding:.6rem 1rem; font:inherit; font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; cursor:pointer; }
 .danger button:hover { border-color:#c0392b; }

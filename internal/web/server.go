@@ -146,6 +146,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/items/{id}/delete", s.requireAdmin(s.csrf(s.handleAdminDelete)))
 	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleAdminSettings))
 	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.csrf(s.handleAdminSettingsSave)))
+	mux.HandleFunc("GET /admin/maintenance", s.requireAdmin(s.handleMaintenance))
+	mux.HandleFunc("POST /admin/maintenance/cleanup", s.requireAdmin(s.csrf(s.handleMaintenanceCleanup)))
 	mux.HandleFunc("POST /admin/backup", s.requireAdmin(s.csrf(s.handleAdminBackup)))
 
 	// PWA share target — the OS share sheet posts here without a CSRF token, so it's

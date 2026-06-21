@@ -206,6 +206,87 @@ func TestAccessibilityMarkup(t *testing.T) {
 	}
 }
 
+func TestScanOrphans(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+
+	// orphan file: present in storage, referenced by no media row
+	_ = s.media.Put(ctx, "items/orphan1/full.jpg", "image/jpeg", strings.NewReader("xx"))
+
+	// healthy item: cover blob present + a media row referencing it
+	okID, _ := s.store.CreateItem(ctx, store.Item{Kind: "image", Title: "ok", Visibility: "public", CoverKey: "items/ok/full.jpg"})
+	_ = s.media.Put(ctx, "items/ok/full.jpg", "image/jpeg", strings.NewReader("yy"))
+	_, _ = s.store.AddMedia(ctx, store.Media{ItemID: okID, Variant: "full", StorageKey: "items/ok/full.jpg", OnLocal: true})
+
+	// broken item: cover key set, but no blob in storage
+	brokenID, _ := s.store.CreateItem(ctx, store.Item{Kind: "image", Title: "broken", Visibility: "public", CoverKey: "items/missing/full.jpg"})
+
+	rep, err := s.scanOrphans(ctx)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	has := func(files []orphanFile, key string) bool {
+		for _, o := range files {
+			if o.Key == key {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(rep.OrphanFiles, "items/orphan1/full.jpg") {
+		t.Errorf("orphan file not detected: %+v", rep.OrphanFiles)
+	}
+	if has(rep.OrphanFiles, "items/ok/full.jpg") {
+		t.Errorf("referenced file wrongly flagged as orphan")
+	}
+	brokenFound, okBroken := false, false
+	for _, v := range rep.BrokenItems {
+		if v.ID == brokenID {
+			brokenFound = true
+		}
+		if v.ID == okID {
+			okBroken = true
+		}
+	}
+	if !brokenFound {
+		t.Errorf("broken item not detected")
+	}
+	if okBroken {
+		t.Errorf("healthy item wrongly flagged broken")
+	}
+}
+
+func TestMaintenancePage(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	sid := "admin-sess"
+	if err := s.store.CreateSession(ctx, sid, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.media.Put(ctx, "items/orphanX/full.jpg", "image/jpeg", strings.NewReader("z"))
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/maintenance", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("maintenance page = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Orphaned media files") {
+		t.Errorf("maintenance page missing report section")
+	}
+	if !strings.Contains(body, "items/orphanX/full.jpg") {
+		t.Errorf("orphan not listed on the page")
+	}
+	// unauthenticated visitors are redirected to login
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/admin/maintenance", nil))
+	if rec2.Code != http.StatusSeeOther {
+		t.Errorf("maintenance not protected: %d", rec2.Code)
+	}
+}
+
 func TestReadyProbe(t *testing.T) {
 	s := newTestServer(t)
 	if rec := getReq(t, s.Handler(), "/ready"); rec.Code != http.StatusOK {
