@@ -127,7 +127,7 @@ func TestSrcsetEagerAndImageJSONLD(t *testing.T) {
 	s := newTestServer(t)
 	id, err := s.store.CreateItem(context.Background(), store.Item{
 		Kind: "image", Title: "Pic", Visibility: "public",
-		CoverKey: "items/x/full.jpg", ThumbKey: "items/x/thumb.jpg", Width: 1600, Height: 1000,
+		CoverKey: "items/x/full.jpg", ThumbKey: "items/x/thumb.jpg", SmallKey: "items/x/small.jpg", Width: 1600, Height: 1000,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -137,6 +137,9 @@ func TestSrcsetEagerAndImageJSONLD(t *testing.T) {
 	board := getReq(t, h, "/").Body.String()
 	if !strings.Contains(board, "/media/items/x/thumb.jpg 800w") {
 		t.Errorf("board card missing srcset thumb descriptor")
+	}
+	if !strings.Contains(board, "/media/items/x/small.jpg 400w") {
+		t.Errorf("board card missing srcset small (400w) descriptor")
 	}
 	if !strings.Contains(board, `fetchpriority="high"`) {
 		t.Errorf("first board card not eager (no fetchpriority)")

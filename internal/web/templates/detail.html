@@ -26,7 +26,7 @@
           {{- if $isVideoFile}}
           <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
           {{- else}}
-          <img src="{{.CoverURL}}"{{if and .ThumbURL (ne .ThumbURL .CoverURL)}} srcset="{{.ThumbURL}} 800w, {{.CoverURL}} 1600w" sizes="(max-width:1000px) 92vw, 60vw"{{end}} alt="{{.AltText}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}" fetchpriority="high"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}>
+          <img src="{{.CoverURL}}"{{if and .ThumbURL (ne .ThumbURL .CoverURL)}} srcset="{{if .SmallURL}}{{.SmallURL}} 400w, {{end}}{{.ThumbURL}} 800w, {{.CoverURL}} 1600w" sizes="(max-width:1000px) 92vw, 60vw"{{end}} alt="{{.AltText}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}" fetchpriority="high"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}>
           <button type="button" class="expand-full" id="expand-full" hidden>[ expand full size ]</button>
           {{- end}}
         </div>

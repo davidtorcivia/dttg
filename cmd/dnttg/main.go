@@ -6,6 +6,7 @@
 //	dnttg migrate               apply migrations and exit
 //	dnttg seed                  insert demo content if the archive is empty
 //	dnttg reconcile             push local-only refined variants up to R2 (backfill)
+//	dnttg backfill-variants     generate the ~400px small variant for older images
 //	dnttg backup                snapshot the DB to the R2 backups bucket (+ prune old)
 //	dnttg reset-content         delete all items/media/tags/categories (keeps password + tokens)
 //	dnttg set-password <pw>     set/replace the admin login password
@@ -57,6 +58,12 @@ func main() {
 		st := mustStore(cfg)
 		defer st.Close()
 		if err := reconcile(context.Background(), st, mustMedia(cfg)); err != nil {
+			log.Fatal(err)
+		}
+	case "backfill-variants":
+		st := mustStore(cfg)
+		defer st.Close()
+		if err := backfillVariants(context.Background(), st, mustMedia(cfg)); err != nil {
 			log.Fatal(err)
 		}
 	case "backup":

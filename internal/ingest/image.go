@@ -13,6 +13,7 @@ import (
 type ProcessedImage struct {
 	FullJPEG      []byte
 	ThumbJPEG     []byte
+	SmallJPEG     []byte // ~400px wide — the smallest responsive srcset step (phones)
 	Placeholder   string // data:image/jpeg;base64,... (tiny blur-up)
 	DominantColor string // #rrggbb
 	Width         int
@@ -22,12 +23,13 @@ type ProcessedImage struct {
 const (
 	fullMax  = 1600
 	thumbMax = 800
+	smallMax = 400
 	phMax    = 24
 )
 
-// ProcessImage decodes raw image bytes and produces refined variants: a full
-// (<=1600px) and thumb (<=800px) JPEG, a tiny base64 blur-up placeholder, and
-// the average ("dominant") color for an elegant loading state.
+// ProcessImage decodes raw image bytes and produces refined variants: full
+// (<=1600px), thumb (<=800px) and small (<=400px) JPEGs, a tiny base64 blur-up
+// placeholder, and the average ("dominant") color for an elegant loading state.
 func ProcessImage(raw []byte) (*ProcessedImage, error) {
 	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
 	if err != nil {
@@ -40,6 +42,9 @@ func ProcessImage(raw []byte) (*ProcessedImage, error) {
 		return nil, err
 	}
 	if pi.ThumbJPEG, err = encodeJPEG(imaging.Fit(img, thumbMax, thumbMax, imaging.Lanczos), 78); err != nil {
+		return nil, err
+	}
+	if pi.SmallJPEG, err = encodeJPEG(imaging.Fit(img, smallMax, smallMax, imaging.Lanczos), 76); err != nil {
 		return nil, err
 	}
 	phJPEG, err := encodeJPEG(imaging.Fit(img, phMax, phMax, imaging.Linear), 40)

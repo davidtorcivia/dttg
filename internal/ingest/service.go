@@ -204,17 +204,20 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 			origKey := fmt.Sprintf("items/%s/original%s", asset, extForContentType(imageCT))
 			fullKey := fmt.Sprintf("items/%s/full.jpg", asset)
 			thumbKey := fmt.Sprintf("items/%s/thumb.jpg", asset)
+			smallKey := fmt.Sprintf("items/%s/small.jpg", asset)
 
 			if err := s.putAll(ctx, []blob{
 				{origKey, orDefault(imageCT, "application/octet-stream"), imageBytes},
 				{fullKey, "image/jpeg", proc.FullJPEG},
 				{thumbKey, "image/jpeg", proc.ThumbJPEG},
+				{smallKey, "image/jpeg", proc.SmallJPEG},
 			}); err != nil {
 				return 0, err
 			}
 
 			it.CoverKey = fullKey
 			it.ThumbKey = thumbKey
+			it.SmallKey = smallKey
 			it.Placeholder = proc.Placeholder
 			it.DominantColor = proc.DominantColor
 			it.Width, it.Height = proc.Width, proc.Height
@@ -223,6 +226,7 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 				store.Media{Variant: "original", StorageKey: origKey, ContentType: imageCT, Bytes: int64(len(imageBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
 				store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: true, OnR2: s.media.Mirrors(fullKey)},
 				store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: true, OnR2: s.media.Mirrors(thumbKey)},
+				store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: true, OnR2: s.media.Mirrors(smallKey)},
 			)
 		} else if kind == "image" && in.URL != "" {
 			it.CoverRemoteURL = in.URL // processing failed; degrade to remote display
@@ -336,16 +340,19 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		origKey := fmt.Sprintf("items/%s/original%s", asset, extForContentType(ct))
 		fullKey := fmt.Sprintf("items/%s/full.jpg", asset)
 		thumbKey := fmt.Sprintf("items/%s/thumb.jpg", asset)
+		smallKey := fmt.Sprintf("items/%s/small.jpg", asset)
 		if err := s.putAll(ctx, []blob{
 			{origKey, orDefault(ct, "application/octet-stream"), fileBytes},
 			{fullKey, "image/jpeg", proc.FullJPEG},
 			{thumbKey, "image/jpeg", proc.ThumbJPEG},
+			{smallKey, "image/jpeg", proc.SmallJPEG},
 		}); err != nil {
 			return err
 		}
 		next.Kind = "image"
 		next.CoverKey = fullKey
 		next.ThumbKey = thumbKey
+		next.SmallKey = smallKey
 		next.Placeholder = proc.Placeholder
 		next.DominantColor = proc.DominantColor
 		next.Width, next.Height = proc.Width, proc.Height
@@ -353,6 +360,7 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 			store.Media{Variant: "original", StorageKey: origKey, ContentType: ct, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
 			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: true, OnR2: s.media.Mirrors(fullKey)},
 			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: true, OnR2: s.media.Mirrors(thumbKey)},
+			store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: true, OnR2: s.media.Mirrors(smallKey)},
 		)
 
 	case strings.HasPrefix(ct, "video/"):

@@ -20,6 +20,7 @@ type itemView struct {
 	store.Item
 	CoverURL  string // full image (detail)
 	ThumbURL  string // small image (grid)
+	SmallURL  string // ~400px variant (smallest srcset step); empty for old items
 	FileURL   string // document/file blob
 	DetailURL string
 	Eager     bool // board: above-the-fold (first row) — load eagerly at high priority
@@ -162,6 +163,9 @@ func (s *Server) view(it store.Item) itemView {
 	}
 	if it.FileKey != "" {
 		v.FileURL = s.media.URL(it.FileKey)
+	}
+	if it.SmallKey != "" {
+		v.SmallURL = s.media.URL(it.SmallKey)
 	}
 	return v
 }

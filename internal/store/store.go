@@ -127,6 +127,7 @@ type Item struct {
 	CoverRemoteURL  string
 	CoverKey        string
 	ThumbKey        string
+	SmallKey        string
 	Placeholder     string
 	FileKey         string // document/file blob key
 	FileName        string
@@ -305,7 +306,7 @@ const itemColumns = `
 	i.id, i.kind, i.title, i.note, i.source_url, i.visibility,
 	COALESCE(i.category_id,0), COALESCE(c.slug,''), COALESCE(c.name,''),
 	i.link_title, i.link_description, i.link_site_name, i.embed_provider, i.embed_html,
-	i.cover_remote_url, i.cover_key, i.thumb_key, i.placeholder, i.dominant_color, i.width, i.height,
+	i.cover_remote_url, i.cover_key, i.thumb_key, i.small_key, i.placeholder, i.dominant_color, i.width, i.height,
 	i.created_at, i.updated_at, i.published_at,
 	i.file_key, i.file_name, i.file_mime, i.file_size`
 
@@ -318,7 +319,7 @@ func scanItem(sc rowScanner) (Item, error) {
 	err := sc.Scan(&it.ID, &it.Kind, &it.Title, &it.Note, &it.SourceURL, &it.Visibility,
 		&it.CategoryID, &it.CategorySlug, &it.CategoryName,
 		&it.LinkTitle, &it.LinkDescription, &it.LinkSiteName, &it.EmbedProvider, &it.EmbedHTML,
-		&it.CoverRemoteURL, &it.CoverKey, &it.ThumbKey, &it.Placeholder, &it.DominantColor, &it.Width, &it.Height,
+		&it.CoverRemoteURL, &it.CoverKey, &it.ThumbKey, &it.SmallKey, &it.Placeholder, &it.DominantColor, &it.Width, &it.Height,
 		&createdAt, &updatedAt, &published,
 		&it.FileKey, &it.FileName, &it.FileMime, &it.FileSize)
 	if err != nil {
@@ -559,13 +560,13 @@ func (s *Store) CreateItem(ctx context.Context, it Item) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `INSERT INTO items
 		(kind,title,note,source_url,visibility,category_id,
 		 link_title,link_description,link_site_name,embed_provider,embed_html,
-		 cover_remote_url,cover_key,thumb_key,placeholder,dominant_color,width,height,
+		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,
 		 file_key,file_name,file_mime,file_size,
 		 created_at,updated_at,published_at)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
 		it.Kind, it.Title, it.Note, it.SourceURL, it.Visibility, categoryID,
 		it.LinkTitle, it.LinkDescription, it.LinkSiteName, it.EmbedProvider, it.EmbedHTML,
-		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.Placeholder, it.DominantColor, it.Width, it.Height,
+		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Width, it.Height,
 		it.FileKey, it.FileName, it.FileMime, it.FileSize,
 		created, now, published)
 	if err != nil {
@@ -630,16 +631,22 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, title, note, sourceURL
 func (s *Store) UpdateItemMedia(ctx context.Context, id int64, it Item) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE items SET
-			kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, placeholder=?,
+			kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, small_key=?, placeholder=?,
 			dominant_color=?, width=?, height=?,
 			file_key=?, file_name=?, file_mime=?, file_size=?,
 			embed_provider=?, embed_html=?,
 			updated_at=unixepoch()
 		WHERE id=?`,
-		it.Kind, it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.Placeholder,
+		it.Kind, it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder,
 		it.DominantColor, it.Width, it.Height,
 		it.FileKey, it.FileName, it.FileMime, it.FileSize,
 		it.EmbedProvider, it.EmbedHTML, id)
+	return err
+}
+
+// SetItemSmallKey sets just the small (400px) variant key (used by the backfill).
+func (s *Store) SetItemSmallKey(ctx context.Context, id int64, key string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE items SET small_key=? WHERE id=?`, key, id)
 	return err
 }
 
