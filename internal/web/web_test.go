@@ -179,6 +179,24 @@ func TestSecurityHeadersAndNonce(t *testing.T) {
 	}
 }
 
+func TestAccessibilityMarkup(t *testing.T) {
+	s := newTestServer(t)
+	body := getReq(t, s.Handler(), "/").Body.String()
+	for _, want := range []string{
+		`class="skip-link"`,
+		`id="maincontent"`,
+		`role="dialog"`,
+		`aria-modal="true"`,
+		`aria-expanded="false"`, // search toggle
+		`aria-pressed=`,         // theme toggle
+		`<noscript>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("board missing a11y markup: %s", want)
+		}
+	}
+}
+
 func TestReadyProbe(t *testing.T) {
 	s := newTestServer(t)
 	if rec := getReq(t, s.Handler(), "/ready"); rec.Code != http.StatusOK {

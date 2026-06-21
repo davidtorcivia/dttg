@@ -135,6 +135,21 @@ func (s *Server) thumbURL(it store.Item) string {
 	}
 }
 
+// AltText is a meaningful image alt: the title, else the filename, else the kind
+// (so untitled items aren't announced as empty by screen readers).
+func (v itemView) AltText() string {
+	switch {
+	case strings.TrimSpace(v.Title) != "":
+		return v.Title
+	case strings.TrimSpace(v.FileName) != "":
+		return v.FileName
+	case v.Kind != "":
+		return v.Kind
+	default:
+		return "untitled"
+	}
+}
+
 func (s *Server) view(it store.Item) itemView {
 	v := itemView{
 		Item:      it,

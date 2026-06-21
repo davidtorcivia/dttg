@@ -9,7 +9,8 @@
   <div class="login-wrap">
     <h1>Restricted</h1>
     <form method="POST" action="/login">
-      <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
+      <label for="login-password" class="visually-hidden">Password</label>
+      <input type="password" id="login-password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
       <button type="submit">Enter</button>
       {{if .Error}}<div class="login-error">{{.Error}}</div>{{end}}
     </form>

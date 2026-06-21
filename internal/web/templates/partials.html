@@ -13,20 +13,22 @@
   <link rel="preload" href="/static/fonts/outfit-latin-300-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/outfit-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{asset "/static/css/app.css"}}">
+  <noscript><style>.card{opacity:1!important;transform:none!important}.colophon{opacity:1!important;transform:none!important}.related-item{opacity:1!important;transform:none!important}</style></noscript>
 {{end}}
 
 {{define "sysheader"}}
+<a href="#maincontent" class="skip-link">Skip to content</a>
 <div class="header">
   <div class="header-left">
     <a href="/">{{.Cfg.SiteTagline}} //</a>
-    <a href="/search" class="search-toggle" id="search-toggle" aria-label="Search">
+    <a href="/search" class="search-toggle" id="search-toggle" aria-label="Search" aria-haspopup="dialog" aria-expanded="false">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
     </a>
   </div>
   <div>{{.Cfg.SiteTitle}}</div>
   <div class="header-right">
     <span id="sys-clock">00:00 // NYC --°F</span>
-    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark (D)">
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" aria-pressed="{{if eq .ThemeAttr "dark"}}true{{else}}false{{end}}" title="Toggle dark (D)">
       <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle><path d="M12 3 a9 9 0 0 0 0 18 z" fill="currentColor"></path></svg>
     </button>
     {{- if not .IsAdmin}}
@@ -36,7 +38,7 @@
     {{- end}}
   </div>
 </div>
-<div class="search-overlay" id="search-overlay">
+<div class="search-overlay" id="search-overlay" role="dialog" aria-modal="true" aria-label="Search">
   <div class="search-panel">
     <form class="search-form" action="/search" method="GET" role="search">
       <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -46,7 +48,7 @@
     <div class="search-results" id="search-results"></div>
   </div>
 </div>
-<div class="shortcuts" id="shortcuts">
+<div class="shortcuts" id="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
   <div class="shortcuts-panel">
     <h2>Keys</h2>
     <dl>
@@ -80,7 +82,7 @@
 <a href="{{.DetailURL}}" class="card">
   <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
     {{- if .ThumbURL}}
-    <img src="{{.ThumbURL}}"{{if and .CoverURL (ne .CoverURL .ThumbURL)}} srcset="{{.ThumbURL}} 800w, {{.CoverURL}} 1600w" sizes="(max-width:600px) 92vw, (max-width:1000px) 46vw, 30vw"{{end}} alt="{{.Title}}"{{if .Eager}} fetchpriority="high"{{else}} loading="lazy"{{end}}{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}} data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
+    <img src="{{.ThumbURL}}"{{if and .CoverURL (ne .CoverURL .ThumbURL)}} srcset="{{.ThumbURL}} 800w, {{.CoverURL}} 1600w" sizes="(max-width:600px) 92vw, (max-width:1000px) 46vw, 30vw"{{end}} alt="{{.AltText}}"{{if .Eager}} fetchpriority="high"{{else}} loading="lazy"{{end}}{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}} data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
     {{- else if eq .Kind "document"}}
     <div class="doc-tile">
       <span class="doc-ext">{{fileext .FileName}}</span>
