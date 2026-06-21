@@ -311,7 +311,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 
 /* ---------- dark mode ---------- */
 html, body { transition:background-color .4s ease, color .4s ease; }
-:root[data-theme="dark"] { color-scheme:dark; --bg:#13110d; --text:#e9e4da; --line:#2a261f; --muted:#9c9488; --faint:#5f584d; --paper-tint:#1a1712; }
+:root[data-theme="dark"] { color-scheme:dark; --bg:#0b0907; --text:#e9e4da; --line:#221e18; --muted:#968e82; --faint:#574f45; --paper-tint:#121009; }
 :root[data-theme="dark"] .card-img-container img,
 :root[data-theme="dark"] .image-wrapper img,
 :root[data-theme="dark"] .related-item img { filter:contrast(1.04) brightness(.9); }
@@ -447,7 +447,7 @@ body.flash-invert { animation:flashInvert .55s ease; }
 .card-img-container:has(img) { overflow:hidden; }
 .card-img-container::after {
   content:""; position:absolute; inset:0; pointer-events:none; opacity:0;
-  background:linear-gradient(105deg, transparent 42%, rgba(255,255,255,.05) 50%, transparent 58%);
+  background:linear-gradient(105deg, transparent 44%, rgba(255,255,255,.03) 50%, transparent 56%);
   transform:translateX(-55%); transition:opacity var(--dur-2) ease;
 }
 @media (pointer:fine) {
