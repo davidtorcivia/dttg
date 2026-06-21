@@ -149,6 +149,37 @@
     });
   }
 
+  // ---- loupe: a magnifier lens over zoomable images (fine pointers) ----
+  // Replaces the OS magnifying-glass cursor; clicking still opens the lightbox.
+  if (window.matchMedia('(pointer: fine)').matches) {
+    var SIZE = 190, ZOOM = 2.2, loupe = null, blendCursor = null;
+    document.addEventListener('mousemove', function (e) {
+      var img = e.target.closest ? e.target.closest('img.zoomable') : null;
+      if (!img || !img.complete || !img.naturalWidth) {
+        if (loupe) loupe.classList.remove('on');
+        if (blendCursor) blendCursor.style.opacity = '';
+        return;
+      }
+      if (!loupe) {
+        loupe = document.createElement('div');
+        loupe.className = 'loupe';
+        loupe.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(loupe);
+        blendCursor = document.querySelector('.cursor');
+      }
+      var r = img.getBoundingClientRect();
+      var src = img.getAttribute('data-full') || img.currentSrc || img.src;
+      if (loupe.__src !== src) { loupe.style.backgroundImage = 'url("' + src + '")'; loupe.__src = src; }
+      var x = e.clientX - r.left, y = e.clientY - r.top; // pointer within the image
+      loupe.style.backgroundSize = (r.width * ZOOM) + 'px ' + (r.height * ZOOM) + 'px';
+      loupe.style.backgroundPosition = (SIZE / 2 - x * ZOOM) + 'px ' + (SIZE / 2 - y * ZOOM) + 'px';
+      loupe.style.left = e.clientX + 'px';
+      loupe.style.top = e.clientY + 'px';
+      loupe.classList.add('on');
+      if (blendCursor) blendCursor.style.opacity = '0'; // the loupe stands in for the cursor here
+    });
+  }
+
   // ---- search overlay + live results ----
   (function () {
     var toggle = document.getElementById('search-toggle');

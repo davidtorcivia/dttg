@@ -332,7 +332,17 @@ html, body { transition:background-color .4s ease, color .4s ease; }
 @view-transition { navigation: auto; }
 
 /* ---------- lightbox ---------- */
-.zoomable { cursor:zoom-in; }
+.zoomable { cursor:none; } /* replaced by the JS loupe on fine pointers */
+/* loupe: a magnifier lens that follows the pointer over a zoomable image */
+.loupe {
+  position:fixed; width:190px; height:190px; border-radius:50%; transform:translate(-50%,-50%);
+  pointer-events:none; z-index:10001; background-repeat:no-repeat; background-color:var(--bg);
+  filter:contrast(1.1);
+  box-shadow:0 0 0 1px rgba(255,255,255,.45), 0 0 0 2px rgba(0,0,0,.3), 0 16px 44px rgba(0,0,0,.4);
+  opacity:0; transition:opacity .18s ease; will-change:transform,background-position;
+}
+.loupe.on { opacity:1; }
+:root[data-theme="dark"] .loupe { filter:contrast(1.04) brightness(.9); }
 /* "lift the glass": the board behind recedes (blur + desaturate) under a warm scrim
    and the image floats above it with a deep contact shadow + hairline frame. */
 .lightbox { position:fixed; inset:0; z-index:11000; display:flex; align-items:center; justify-content:center; background:rgba(14,11,8,.5); -webkit-backdrop-filter:blur(24px) saturate(.7) brightness(.85); backdrop-filter:blur(24px) saturate(.7) brightness(.85); padding:4vw; opacity:0; visibility:hidden; transition:opacity var(--dur-1) ease, visibility var(--dur-1) ease; overflow:hidden; }
