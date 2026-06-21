@@ -176,11 +176,15 @@ func TestSecurityHeadersAndNonce(t *testing.T) {
 		t.Errorf("missing Referrer-Policy / X-Frame-Options")
 	}
 	csp := h.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "script-src") || !strings.Contains(csp, "nonce-") {
-		t.Fatalf("CSP missing script-src nonce: %q", csp)
+	// Cloudflare-compatible policy: same-origin scripts allowed (no strict-dynamic),
+	// but framing/objects/base-uri still locked down.
+	for _, want := range []string{"script-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing %q (got %q)", want, csp)
+		}
 	}
-	if !strings.Contains(rec.Body.String(), "nonce=") {
-		t.Errorf("rendered page has no nonce on its scripts")
+	if strings.Contains(csp, "strict-dynamic") {
+		t.Errorf("CSP must not use strict-dynamic (breaks Cloudflare Rocket Loader): %q", csp)
 	}
 }
 

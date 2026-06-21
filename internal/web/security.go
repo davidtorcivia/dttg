@@ -77,11 +77,14 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// contentSecurityPolicy is the strict-CSP3 recipe: modern browsers honour the
-// nonce + 'strict-dynamic' and ignore the rest; old browsers fall back to the
-// permissive trailing tokens. style-src keeps 'unsafe-inline' because the UI sets
-// element styles from JS (blur-up, transforms, cursor).
-func contentSecurityPolicy(nonce string) string {
+// contentSecurityPolicy is intentionally NOT a strict (nonce/'strict-dynamic')
+// policy: the site runs behind Cloudflare, whose Rocket Loader + injected scripts
+// (analytics beacon, email obfuscation) are same-origin /cdn-cgi/ assets with no
+// nonce, and strict-dynamic would block them — which kills ALL JS. So script-src
+// allows 'self' + same-origin + https + inline, while the other directives still
+// lock down framing, objects, base-uri and form actions. (nonce kept unused for a
+// possible future strict policy if Rocket Loader is disabled.)
+func contentSecurityPolicy(_ string) string {
 	return strings.Join([]string{
 		"default-src 'self'",
 		"base-uri 'self'",
@@ -92,9 +95,9 @@ func contentSecurityPolicy(nonce string) string {
 		"media-src 'self' https:",
 		"font-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
-		"script-src 'nonce-" + nonce + "' 'strict-dynamic' 'unsafe-inline' https: 'self'",
+		"script-src 'self' 'unsafe-inline' https:",
 		"frame-src https://www.youtube.com https://www.youtube-nocookie.com https://youtube.com https://player.vimeo.com",
-		"connect-src 'self'",
+		"connect-src 'self' https:",
 	}, "; ")
 }
 
