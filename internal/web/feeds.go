@@ -4,12 +4,17 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"net/http"
+	"strings"
 	"time"
 
 	"donottouchtheglass/internal/store"
 )
 
 const feedLimit = 50
+
+func isVideoItem(it store.Item) bool {
+	return it.Kind == "embed" && strings.HasPrefix(it.FileMime, "video/")
+}
 
 func itemTitleOr(it store.Item) string {
 	switch {
@@ -25,25 +30,39 @@ func itemTitleOr(it store.Item) string {
 
 func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
+	type jfAttachment struct {
+		URL         string `json:"url"`
+		MimeType    string `json:"mime_type"`
+		SizeInBytes int64  `json:"size_in_bytes,omitempty"`
+	}
 	type jf struct {
-		ID            string `json:"id"`
-		URL           string `json:"url"`
-		Title         string `json:"title"`
-		ContentText   string `json:"content_text,omitempty"`
-		Image         string `json:"image,omitempty"`
-		DatePublished string `json:"date_published"`
+		ID            string         `json:"id"`
+		URL           string         `json:"url"`
+		Title         string         `json:"title"`
+		ContentText   string         `json:"content_text,omitempty"`
+		Image         string         `json:"image,omitempty"`
+		DatePublished string         `json:"date_published"`
+		Attachments   []jfAttachment `json:"attachments,omitempty"`
 	}
 	var arr []jf
 	for _, it := range items {
 		v := s.view(it)
-		arr = append(arr, jf{
+		item := jf{
 			ID:            s.absURL(v.DetailURL),
 			URL:           s.absURL(v.DetailURL),
 			Title:         itemTitleOr(it),
 			ContentText:   it.Note,
 			Image:         s.absURL(v.CoverURL),
 			DatePublished: it.CreatedAt.Format(time.RFC3339),
-		})
+		}
+		if isVideoItem(it) && v.FileURL != "" {
+			item.Attachments = []jfAttachment{{
+				URL:         s.absURL(v.FileURL),
+				MimeType:    it.FileMime,
+				SizeInBytes: it.FileSize,
+			}}
+		}
+		arr = append(arr, item)
 	}
 	w.Header().Set("Content-Type", "application/feed+json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -57,12 +76,18 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
+	type rssEnclosure struct {
+		URL    string `xml:"url,attr"`
+		Length int64  `xml:"length,attr"`
+		Type   string `xml:"type,attr"`
+	}
 	type rssItem struct {
-		Title       string `xml:"title"`
-		Link        string `xml:"link"`
-		GUID        string `xml:"guid"`
-		PubDate     string `xml:"pubDate"`
-		Description string `xml:"description"`
+		Title       string        `xml:"title"`
+		Link        string        `xml:"link"`
+		GUID        string        `xml:"guid"`
+		PubDate     string        `xml:"pubDate"`
+		Description string        `xml:"description"`
+		Enclosure   *rssEnclosure `xml:"enclosure,omitempty"`
 	}
 	type channel struct {
 		Title       string    `xml:"title"`
@@ -86,13 +111,21 @@ func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 		if v.CoverURL != "" {
 			desc = `<img src="` + s.absURL(v.CoverURL) + `" alt=""/>` + desc
 		}
-		doc.Channel.Items = append(doc.Channel.Items, rssItem{
+		ri := rssItem{
 			Title:       itemTitleOr(it),
 			Link:        s.absURL(v.DetailURL),
 			GUID:        s.absURL(v.DetailURL),
 			PubDate:     it.CreatedAt.Format(time.RFC1123Z),
 			Description: desc,
-		})
+		}
+		if isVideoItem(it) && v.FileURL != "" {
+			ri.Enclosure = &rssEnclosure{
+				URL:    s.absURL(v.FileURL),
+				Length: it.FileSize,
+				Type:   it.FileMime,
+			}
+		}
+		doc.Channel.Items = append(doc.Channel.Items, ri)
 	}
 	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
 	_, _ = w.Write([]byte(xml.Header))

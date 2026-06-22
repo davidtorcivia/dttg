@@ -117,8 +117,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats", s.handleAPIStats)
 	mux.HandleFunc("POST /api/translate", s.handleTranslate)
 	mux.HandleFunc("GET /board/more", s.handleBoardMore)
-	mux.HandleFunc("GET /feed.json", s.handleFeedJSON)
-	mux.HandleFunc("GET /feed.xml", s.handleFeedRSS)
+	// Feeds are CORS-open so cross-origin browser apps can fetch them directly
+	// (a simple GET sends no preflight; the header on the response is enough).
+	mux.HandleFunc("GET /feed.json", s.cors(s.handleFeedJSON))
+	mux.HandleFunc("GET /feed.xml", s.cors(s.handleFeedRSS))
 	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
 
