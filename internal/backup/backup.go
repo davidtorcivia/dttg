@@ -161,9 +161,9 @@ func (b *Backuper) Start(ctx context.Context) {
 	go func() {
 		t := time.NewTicker(b.cfg.Interval)
 		defer t.Stop()
-		// Back up ~30s after boot so every restart/redeploy produces a snapshot
-		// (the 30s settle avoids spamming during a crash-loop); retention prunes old ones.
-		first := time.NewTimer(30 * time.Second)
+		// Back up ~1h after boot, then on the regular interval. The hour delay keeps
+		// dev restarts/redeploys from churning out near-identical snapshots.
+		first := time.NewTimer(time.Hour)
 		defer first.Stop()
 		for {
 			select {
