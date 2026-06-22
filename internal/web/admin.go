@@ -16,6 +16,7 @@ import (
 type BackupController interface {
 	RunOnce(ctx context.Context) error
 	Status() (last time.Time, count int, lastErr string)
+	LatestRemote(ctx context.Context) (last time.Time, count int, err error)
 	RetentionDays() int
 }
 
@@ -192,9 +193,14 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	sv := &settingsView{Tracking: tracking, Columns: s.boardColumns(r.Context())}
 	sv.Backup.Enabled = s.backup != nil
 	if s.backup != nil {
-		last, count, lerr := s.backup.Status()
-		sv.Backup.Last, sv.Backup.Count, sv.Backup.Err = last, count, lerr
+		_, _, sv.Backup.Err = s.backup.Status() // last error this session
 		sv.Backup.RetentionDays = s.backup.RetentionDays()
+		// real backup history from R2 (survives restarts, unlike the session counter)
+		if last, count, err := s.backup.LatestRemote(r.Context()); err == nil {
+			sv.Backup.Last, sv.Backup.Count = last, count
+		} else if sv.Backup.Err == "" {
+			sv.Backup.Err = "could not list R2 backups: " + err.Error()
+		}
 	}
 	pd := s.page(r, "SETTINGS")
 	pd.Settings = sv

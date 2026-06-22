@@ -121,13 +121,33 @@ func (b *Backuper) prune(ctx context.Context) error {
 	return nil
 }
 
+// LatestRemote reports the most recent backup time and the total number of
+// snapshots currently in the R2 bucket. Unlike Status (in-memory, per-session)
+// this reflects reality across restarts/redeploys.
+func (b *Backuper) LatestRemote(ctx context.Context) (time.Time, int, error) {
+	var latest time.Time
+	count := 0
+	for obj := range b.client.ListObjects(ctx, b.cfg.Bucket,
+		minio.ListObjectsOptions{Prefix: "db/", Recursive: true}) {
+		if obj.Err != nil {
+			return latest, count, obj.Err
+		}
+		count++
+		if obj.LastModified.After(latest) {
+			latest = obj.LastModified
+		}
+	}
+	return latest, count, nil
+}
+
 // Start launches the periodic backup loop until ctx is cancelled.
 func (b *Backuper) Start(ctx context.Context) {
 	go func() {
 		t := time.NewTicker(b.cfg.Interval)
 		defer t.Stop()
-		// first backup an hour after boot to avoid restart storms
-		first := time.NewTimer(time.Hour)
+		// Back up ~30s after boot so every restart/redeploy produces a snapshot
+		// (the 30s settle avoids spamming during a crash-loop); retention prunes old ones.
+		first := time.NewTimer(30 * time.Second)
 		defer first.Stop()
 		for {
 			select {
