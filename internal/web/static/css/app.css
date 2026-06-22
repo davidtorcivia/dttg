@@ -492,13 +492,6 @@ body.flash-invert { animation:flashInvert .55s ease; }
   }
 }
 
-/* ---------- top scroll-progress hairline ---------- */
-.scroll-progress { position:fixed; top:0; left:0; height:2px; width:100%; transform-origin:0 50%; transform:scaleX(0); background:var(--text); opacity:.5; z-index:9000; pointer-events:none; }
-@supports (animation-timeline: scroll()) {
-  .scroll-progress { animation:progressGrow linear both; animation-timeline:scroll(root); }
-  @keyframes progressGrow { from { transform:scaleX(0); } to { transform:scaleX(1); } }
-}
-
 /* ---------- designed states: empty / loading / end-of-feed ---------- */
 .empty { color:var(--faint); text-transform:uppercase; letter-spacing:.2em; font-size:.72rem; padding:6rem 0; text-align:center; }
 /* contact-sheet skeleton shown while a batch loads */

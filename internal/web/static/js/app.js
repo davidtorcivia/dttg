@@ -852,22 +852,6 @@
     document.addEventListener('touchstart', onIntent, { passive: true });
   })();
 
-  // ---- top scroll-progress hairline (CSS drives it where scroll-timeline exists) ----
-  (function () {
-    var bar = document.createElement('div');
-    bar.className = 'scroll-progress';
-    bar.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(bar);
-    if (window.CSS && CSS.supports && CSS.supports('animation-timeline: scroll()')) return;
-    var update = function () {
-      var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
-      bar.style.transform = 'scaleX(' + (max > 0 ? h.scrollTop / max : 0) + ')';
-    };
-    window.addEventListener('scroll', update, { passive: true });
-    window.addEventListener('resize', update);
-    update();
-  })();
-
   // ---- colophon reveal (past the end) ----
   (function () {
     var col = document.getElementById('colophon');
