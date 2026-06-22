@@ -67,6 +67,18 @@ func New(st *store.Store, dataDir string, cfg Config) (*Backuper, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 24 * time.Hour
 	}
+	// Best-effort: create the backups bucket if it doesn't exist yet (a common
+	// reason backups silently never appear). If the token can't check/create it,
+	// log and carry on — RunOnce will surface the real PutObject error.
+	if exists, e := client.BucketExists(context.Background(), cfg.Bucket); e != nil {
+		log.Printf("backup: could not verify bucket %q (token may lack access): %v", cfg.Bucket, e)
+	} else if !exists {
+		if me := client.MakeBucket(context.Background(), cfg.Bucket, minio.MakeBucketOptions{Region: "auto"}); me != nil {
+			log.Printf("backup: bucket %q is missing and could not be created: %v", cfg.Bucket, me)
+		} else {
+			log.Printf("backup: created bucket %q", cfg.Bucket)
+		}
+	}
 	return &Backuper{cfg: cfg, store: st, client: client, dataDir: dataDir}, nil
 }
 
@@ -99,10 +111,14 @@ func (b *Backuper) run(ctx context.Context) error {
 	key := "db/dnttg-" + time.Now().UTC().Format("20060102-150405") + ".db"
 	if _, err := b.client.PutObject(ctx, b.cfg.Bucket, key, bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "application/x-sqlite3"}); err != nil {
-		return fmt.Errorf("upload: %w", err)
+		return fmt.Errorf("upload to bucket %q: %w", b.cfg.Bucket, err)
 	}
-	log.Printf("backup: uploaded %s (%d bytes)", key, len(data))
-	return b.prune(ctx)
+	log.Printf("backup: uploaded %s (%d bytes) to %q", key, len(data), b.cfg.Bucket)
+	// A successful upload is a successful backup — a prune hiccup must not mask it.
+	if err := b.prune(ctx); err != nil {
+		log.Printf("backup: prune failed (snapshot is safe): %v", err)
+	}
+	return nil
 }
 
 func (b *Backuper) prune(ctx context.Context) error {
