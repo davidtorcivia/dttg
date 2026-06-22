@@ -73,7 +73,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .card-text { font-weight:300; font-size:1rem; line-height:1.6; padding:.5rem 0; word-break:break-word; }
 .card-meta { flex:0 0 1.8rem; writing-mode:vertical-rl; text-orientation:mixed; display:flex; justify-content:flex-start; border-left:1px solid var(--line); padding-left:.5rem; }
 .meta-info { font-size:.64rem; display:flex; gap:1.5rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; }
-.id-num { color:var(--accent); }
+.id-label { color:var(--accent); }
 .empty { color:var(--faint); text-transform:uppercase; letter-spacing:.1em; font-size:.8rem; }
 
 /* ---------- detail ---------- */
