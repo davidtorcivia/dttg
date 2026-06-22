@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -159,9 +160,80 @@ func TestFeeds(t *testing.T) {
 	_, _ = s.store.CreateItem(context.Background(), store.Item{Kind: "text", Title: "Feed Item", Visibility: "public"})
 	h := s.Handler()
 	for _, p := range []string{"/feed.json", "/feed.xml"} {
-		if rec := getReq(t, h, p); rec.Code != http.StatusOK {
+		rec := getReq(t, h, p)
+		if rec.Code != http.StatusOK {
 			t.Errorf("%s status = %d", p, rec.Code)
 		}
+		// Feeds must be CORS-open so cross-origin browser consumers can fetch them.
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Errorf("%s Access-Control-Allow-Origin = %q, want *", p, got)
+		}
+	}
+}
+
+func TestFeedVideoAttachment(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	// A video with a known byte size, a video whose size was never captured
+	// (FileSize == 0), and a plain text item that must carry no attachment.
+	_, _ = s.store.CreateItem(ctx, store.Item{
+		Kind: "embed", Title: "Clip", Visibility: "public",
+		FileKey: "items/clip/video.mp4", FileMime: "video/mp4", FileSize: 1234,
+		CoverKey: "items/clip/poster.jpg",
+	})
+	_, _ = s.store.CreateItem(ctx, store.Item{
+		Kind: "embed", Title: "NoSize", Visibility: "public",
+		FileKey: "items/nosize/video.mp4", FileMime: "video/mp4", FileSize: 0,
+	})
+	_, _ = s.store.CreateItem(ctx, store.Item{Kind: "text", Title: "JustText", Visibility: "public"})
+	h := s.Handler()
+
+	// JSON Feed: decode and assert per item, so "no attachment" is provable.
+	var feed struct {
+		Items []struct {
+			Title       string `json:"title"`
+			Attachments []struct {
+				URL         string `json:"url"`
+				MimeType    string `json:"mime_type"`
+				SizeInBytes int64  `json:"size_in_bytes"`
+			} `json:"attachments"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(getReq(t, h, "/feed.json").Body.Bytes(), &feed); err != nil {
+		t.Fatalf("feed.json is not valid JSON: %v", err)
+	}
+	byTitle := map[string]int{}
+	for _, it := range feed.Items {
+		byTitle[it.Title] = len(it.Attachments)
+	}
+	if byTitle["JustText"] != 0 {
+		t.Errorf("text item should have no attachment, got %d", byTitle["JustText"])
+	}
+	if byTitle["Clip"] != 1 || byTitle["NoSize"] != 1 {
+		t.Errorf("video items should each have 1 attachment, got Clip=%d NoSize=%d", byTitle["Clip"], byTitle["NoSize"])
+	}
+	for _, it := range feed.Items {
+		if it.Title == "Clip" {
+			a := it.Attachments[0]
+			if a.MimeType != "video/mp4" || a.SizeInBytes != 1234 || !strings.HasSuffix(a.URL, "items/clip/video.mp4") {
+				t.Errorf("Clip attachment wrong: %+v", a)
+			}
+		}
+		if it.Title == "NoSize" && it.Attachments[0].SizeInBytes != 0 {
+			t.Errorf("NoSize attachment should omit size, got %d", it.Attachments[0].SizeInBytes)
+		}
+	}
+
+	// RSS: the sized clip gets a full enclosure; the text item gets none.
+	rssBody := getReq(t, h, "/feed.xml").Body.String()
+	for _, want := range []string{"<enclosure", `type="video/mp4"`, `length="1234"`, "items/clip/video.mp4"} {
+		if !strings.Contains(rssBody, want) {
+			t.Errorf("feed.xml missing %q\n%s", want, rssBody)
+		}
+	}
+	// Two video items -> exactly two enclosures (text item adds none).
+	if got := strings.Count(rssBody, "<enclosure"); got != 2 {
+		t.Errorf("expected 2 RSS enclosures (one per video), got %d", got)
 	}
 }
 
