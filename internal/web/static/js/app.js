@@ -13,13 +13,16 @@
   // down (newest three in the top row, etc.). Cards are distributed round-robin
   // into N flex columns; each column still packs to its own content height, so it
   // stays a masonry without the column-major fill order of CSS `column-count`.
-  // Phones get a single column and small/narrow windows two; desktop honours the
-  // configured 3 or 4 (the masonry order stays chronological via grid.__order, so
-  // collapsing to fewer columns doesn't scramble it).
+  // Phones get a single column and small/narrow windows two; the configured 3 or 4
+  // is a *cap* that only unlocks on a genuinely wide display. A 4th column would be
+  // too cramped on a ~1400px laptop, so it's held back until ~1600px+ — a 14" MBP
+  // lands on 3, a 1440p+ monitor gets the full 4. (The masonry order stays
+  // chronological via grid.__order, so collapsing to fewer columns doesn't scramble it.)
   function gridColumnCount(maxCols) {
     var w = window.innerWidth;
     if (w <= 600) return 1;
     if (w <= 1000) return 2;
+    if (w < 1600) return Math.min(3, maxCols);
     return maxCols;
   }
   function gridMaxCols(grid) {

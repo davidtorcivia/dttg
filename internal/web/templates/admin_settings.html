@@ -11,7 +11,7 @@
 
     <form method="POST" action="/admin/settings">{{template "csrf" .}}
       <label>Board columns (wide screens)
-        <span>Masonry columns on wide screens. 4 packs items smaller; narrower screens step down automatically. Default 3.</span>
+        <span>Maximum masonry columns. 4 only unlocks on very wide displays (~1600px+); laptops show 3, tablets 2, phones 1 — stepping down automatically. Default 3.</span>
         <select name="board_columns">
           <option value="3"{{if eq .Settings.Columns 3}} selected{{end}}>3 — larger items (default)</option>
           <option value="4"{{if eq .Settings.Columns 4}} selected{{end}}>4 — smaller items</option>
