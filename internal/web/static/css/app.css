@@ -6,6 +6,7 @@
 :root {
   /* warm ink on warm paper — "off-white is not white" */
   --bg:#f5f3ec; --text:#1a1714; --line:#e0dbd0; --muted:#6e675c; --faint:#b0a99c;
+  --accent:#c79a00;            /* deep yellow/gold — legible on warm paper */
   --paper-tint:#efece2;        /* faintly deeper paper for wells */
   /* motion language */
   --ease-glass:cubic-bezier(.2,.8,.2,1);
@@ -72,6 +73,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .card-text { font-weight:300; font-size:1rem; line-height:1.6; padding:.5rem 0; word-break:break-word; }
 .card-meta { flex:0 0 1.8rem; writing-mode:vertical-rl; text-orientation:mixed; display:flex; justify-content:flex-start; border-left:1px solid var(--line); padding-left:.5rem; }
 .meta-info { font-size:.64rem; display:flex; gap:1.5rem; text-transform:uppercase; letter-spacing:.1em; font-weight:500; }
+.id-num { color:var(--accent); }
 .empty { color:var(--faint); text-transform:uppercase; letter-spacing:.1em; font-size:.8rem; }
 
 /* ---------- detail ---------- */
@@ -317,7 +319,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 
 /* ---------- dark mode ---------- */
 html, body { transition:background-color .4s ease, color .4s ease; }
-:root[data-theme="dark"] { color-scheme:dark; --bg:#0b0907; --text:#e9e4da; --line:#221e18; --muted:#968e82; --faint:#574f45; --paper-tint:#121009; }
+:root[data-theme="dark"] { color-scheme:dark; --bg:#0b0907; --text:#e9e4da; --line:#221e18; --muted:#968e82; --faint:#574f45; --accent:#f0c850; --paper-tint:#121009; }
 :root[data-theme="dark"] .card-img-container img,
 :root[data-theme="dark"] .image-wrapper img,
 :root[data-theme="dark"] .related-item img { filter:contrast(1.04) brightness(.9); }
