@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"donottouchtheglass/internal/config"
@@ -39,6 +41,8 @@ type Server struct {
 	weather weatherCache
 	loginRL *loginLimiter
 	ogCache *ogCache
+	siteOG  siteOGCache                  // cached default (site-wide) OG share card
+	site    atomic.Pointer[siteIdentity] // admin-editable branding, lock-free reads
 	csrfKey []byte
 }
 
@@ -75,6 +79,7 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 	csrfKey := make([]byte, 32)
 	_, _ = rand.Read(csrfKey)
 	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl, loginRL: newLoginLimiter(), ogCache: newOGCache(256), csrfKey: csrfKey}
+	s.loadSite(context.Background()) // publish admin-editable branding (title/url/etc.)
 	s.startWeather()
 	return s, nil
 }
@@ -111,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /tag/{slug}", s.handleBoard)
 	mux.HandleFunc("GET /item/{id}", s.handleDetail)
 	mux.HandleFunc("GET /item/{id}/og.jpg", s.handleOGImage)
+	mux.HandleFunc("GET /og.jpg", s.handleSiteOGImage)
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /search/cards", s.handleSearchCards)
 	mux.HandleFunc("GET /api/search", s.handleAPISearch)

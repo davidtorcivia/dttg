@@ -83,8 +83,13 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		themeAttr = c.Value
 	}
 	nonce := nonceFromContext(r.Context())
+	// Overlay the admin-editable branding onto the per-request config copy so every
+	// template ({{.Cfg.SiteTitle}} etc.) renders the effective values.
+	site := s.siteID()
+	cfg := s.cfg
+	cfg.SiteTitle, cfg.SiteTagline, cfg.BaseURL = site.Title, site.Tagline, site.BaseURL
 	pd := pageData{
-		Cfg:         s.cfg,
+		Cfg:         cfg,
 		IsAdmin:     isAdmin,
 		Categories:  cats,
 		PageTitle:   title,
@@ -92,9 +97,9 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		ThemeAttr:   themeAttr,
 		Nonce:       nonce,
 		Meta: metaTags{
-			Description: s.cfg.SiteTitle + " — a personal visual archive.",
+			Description: s.metaDescription(),
 			URL:         s.absURL(r.URL.Path),
-			Image:       s.absURL("/static/icons/icon-512.png"),
+			Image:       s.absURL("/og.jpg"), // generated default share card
 			Type:        "website",
 		},
 	}
@@ -115,7 +120,7 @@ func (s *Server) absURL(u string) string {
 	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return u
 	}
-	return s.cfg.BaseURL + u
+	return s.siteBaseURL() + u
 }
 
 // coverURL resolves the full image for an item. The media store decides whether
@@ -260,7 +265,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pd := s.page(r, s.cfg.SiteTitle)
+	pd := s.page(r, s.siteTitle())
 	pd.ActiveCat = f.CategorySlug
 	pd.ActiveTag = f.TagSlug
 	pd.BoardColumns = s.boardColumns(r.Context())
@@ -342,7 +347,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	pd.Meta.Image = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
 	pd.JSONLD = s.itemJSONLD(v, pd.Nonce)
 	if it.Title == "" {
-		pd.PageTitle = s.cfg.SiteTitle
+		pd.PageTitle = s.siteTitle()
 	}
 
 	// Prev/next within the board ordering (newer / older)
@@ -380,7 +385,7 @@ func (s *Server) itemJSONLD(v itemView, nonce string) template.HTML {
 	it := v.Item
 	name := it.Title
 	if name == "" {
-		name = s.cfg.SiteTitle
+		name = s.siteTitle()
 	}
 	ld := map[string]any{
 		"@context": "https://schema.org",

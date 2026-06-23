@@ -23,7 +23,12 @@ type BackupController interface {
 type settingsView struct {
 	Tracking string
 	Columns  int // wide-screen board columns (3 or 4)
-	Backup   backupView
+	// Site identity (admin-editable branding; empty falls back to env defaults).
+	Title       string
+	Tagline     string
+	BaseURL     string
+	Description string
+	Backup      backupView
 }
 
 type backupView struct {
@@ -190,7 +195,15 @@ func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	tracking, _ := s.store.GetSetting(r.Context(), "tracking_script")
-	sv := &settingsView{Tracking: tracking, Columns: s.boardColumns(r.Context())}
+	id := s.siteID()
+	sv := &settingsView{
+		Tracking:    tracking,
+		Columns:     s.boardColumns(r.Context()),
+		Title:       id.Title,
+		Tagline:     id.Tagline,
+		BaseURL:     id.BaseURL,
+		Description: id.Description,
+	}
 	sv.Backup.Enabled = s.backup != nil
 	if s.backup != nil {
 		_, _, sv.Backup.Err = s.backup.Status() // last error this session
@@ -209,6 +222,20 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
+	// Site identity. Stored values override the env config; blank reverts to the
+	// env default (loadSite falls back when a setting is empty).
+	site := map[string]string{
+		"site_title":       strings.TrimSpace(r.FormValue("site_title")),
+		"site_tagline":     strings.TrimSpace(r.FormValue("site_tagline")),
+		"base_url":         strings.TrimRight(strings.TrimSpace(r.FormValue("base_url")), "/"),
+		"site_description": strings.TrimSpace(r.FormValue("site_description")),
+	}
+	for k, v := range site {
+		if err := s.store.SetSetting(r.Context(), k, v); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+	}
 	if err := s.store.SetSetting(r.Context(), "tracking_script", r.FormValue("tracking_script")); err != nil {
 		s.serverError(w, r, err)
 		return
@@ -221,6 +248,7 @@ func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request)
 		s.serverError(w, r, err)
 		return
 	}
+	s.loadSite(r.Context()) // republish branding (and bust the cached share card via its fingerprint)
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
 }
 

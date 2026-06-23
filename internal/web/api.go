@@ -74,7 +74,7 @@ func (s *Server) handleAPICreateItem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":  id,
-		"url": s.cfg.BaseURL + "/item/" + strconv.FormatInt(id, 10),
+		"url": s.siteBaseURL() + "/item/" + strconv.FormatInt(id, 10),
 	})
 }
 

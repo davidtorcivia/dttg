@@ -27,6 +27,10 @@ type Config struct {
 
 	SiteTitle   string // shown center of the header bar
 	SiteTagline string // shown left of the header bar (e.g. "INDEX")
+	// SiteDescription is the tagline appended after the title in SEO/share text
+	// ("<title> — <description>"). All three are env defaults that the admin
+	// Settings page can override at runtime (stored in the DB).
+	SiteDescription string
 
 	// R2 (used by the ingest mirror in M2; read here so config stays in one place).
 	R2AccountID string
@@ -51,21 +55,22 @@ func env(key, def string) string {
 func Load() Config {
 	dataDir := env("DNTTG_DATA_DIR", "data")
 	c := Config{
-		Addr:         env("DNTTG_ADDR", ":8080"),
-		DataDir:      dataDir,
-		DBPath:       env("DNTTG_DB_PATH", filepath.Join(dataDir, "dnttg.db")),
-		MediaDir:     env("DNTTG_MEDIA_DIR", filepath.Join(dataDir, "media")),
-		BaseURL:      strings.TrimRight(env("DNTTG_BASE_URL", "http://localhost:8080"), "/"),
-		MediaBaseURL: strings.TrimRight(env("DNTTG_MEDIA_BASE_URL", ""), "/"),
-		Dev:          env("DNTTG_DEV", "") != "",
-		TrustProxy:   env("DNTTG_TRUST_PROXY", "") != "",
-		SiteTitle:    env("DNTTG_SITE_TITLE", "DO NOT TOUCH THE GLASS"),
-		SiteTagline:  env("DNTTG_SITE_TAGLINE", "INDEX"),
-		R2AccountID:  env("R2_ACCOUNT_ID", ""),
-		R2Bucket:     env("R2_BUCKET", ""),
-		R2AccessKey:  env("R2_ACCESS_KEY_ID", ""),
-		R2SecretKey:  env("R2_SECRET_ACCESS_KEY", ""),
-		R2Endpoint:   env("R2_ENDPOINT", ""),
+		Addr:            env("DNTTG_ADDR", ":8080"),
+		DataDir:         dataDir,
+		DBPath:          env("DNTTG_DB_PATH", filepath.Join(dataDir, "dnttg.db")),
+		MediaDir:        env("DNTTG_MEDIA_DIR", filepath.Join(dataDir, "media")),
+		BaseURL:         strings.TrimRight(env("DNTTG_BASE_URL", "http://localhost:8080"), "/"),
+		MediaBaseURL:    strings.TrimRight(env("DNTTG_MEDIA_BASE_URL", ""), "/"),
+		Dev:             env("DNTTG_DEV", "") != "",
+		TrustProxy:      env("DNTTG_TRUST_PROXY", "") != "",
+		SiteTitle:       env("DNTTG_SITE_TITLE", "DO NOT TOUCH THE GLASS"),
+		SiteTagline:     env("DNTTG_SITE_TAGLINE", "INDEX"),
+		SiteDescription: env("DNTTG_SITE_DESCRIPTION", "a personal visual archive."),
+		R2AccountID:     env("R2_ACCOUNT_ID", ""),
+		R2Bucket:        env("R2_BUCKET", ""),
+		R2AccessKey:     env("R2_ACCESS_KEY_ID", ""),
+		R2SecretKey:     env("R2_SECRET_ACCESS_KEY", ""),
+		R2Endpoint:      env("R2_ENDPOINT", ""),
 
 		R2BackupBucket:      env("R2_BACKUP_BUCKET", ""),
 		BackupRetentionDays: atoiDefault(env("DNTTG_BACKUP_RETENTION_DAYS", ""), 14),

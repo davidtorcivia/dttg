@@ -67,9 +67,9 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/feed+json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version":       "https://jsonfeed.org/version/1.1",
-		"title":         s.cfg.SiteTitle,
-		"home_page_url": s.cfg.BaseURL,
-		"feed_url":      s.cfg.BaseURL + "/feed.json",
+		"title":         s.siteTitle(),
+		"home_page_url": s.siteBaseURL(),
+		"feed_url":      s.siteBaseURL() + "/feed.json",
 		"items":         arr,
 	})
 }
@@ -101,9 +101,9 @@ func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 		Channel channel  `xml:"channel"`
 	}
 	doc := rss{Version: "2.0", Channel: channel{
-		Title:       s.cfg.SiteTitle,
-		Link:        s.cfg.BaseURL,
-		Description: s.cfg.SiteTitle + " — a personal visual archive.",
+		Title:       s.siteTitle(),
+		Link:        s.siteBaseURL(),
+		Description: s.metaDescription(),
 	}}
 	for _, it := range items {
 		v := s.view(it)

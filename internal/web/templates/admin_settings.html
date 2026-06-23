@@ -10,6 +10,22 @@
     <h1>Settings</h1>
 
     <form method="POST" action="/admin/settings">{{template "csrf" .}}
+      <label>Site title
+        <span>Shown in the header, page titles, feeds, and share cards. Leave blank to use the deploy default.</span>
+        <input type="text" name="site_title" value="{{.Settings.Title}}" placeholder="DO NOT TOUCH THE GLASS">
+      </label>
+      <label>Header tagline
+        <span>Small label to the left of the header (e.g. INDEX).</span>
+        <input type="text" name="site_tagline" value="{{.Settings.Tagline}}" placeholder="INDEX">
+      </label>
+      <label>Public base URL
+        <span>Canonical origin for links, feeds, sitemap, and share cards — e.g. https://look.disinfo.zone. No trailing slash. (Cookie security still follows the server's configured origin.)</span>
+        <input type="url" name="base_url" value="{{.Settings.BaseURL}}" placeholder="https://example.com">
+      </label>
+      <label>Description
+        <span>Tagline appended after the title in SEO/share text: “Title — description.”</span>
+        <input type="text" name="site_description" value="{{.Settings.Description}}" placeholder="a personal visual archive.">
+      </label>
       <label>Board columns (wide screens)
         <span>Maximum masonry columns. 4 only unlocks on very wide displays (~1600px+); laptops show 3, tablets 2, phones 1 — stepping down automatically. Default 3.</span>
         <select name="board_columns">

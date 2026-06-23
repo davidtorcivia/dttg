@@ -133,5 +133,5 @@ func (s *Server) handleRobots(w http.ResponseWriter, _ *http.Request) {
 		"Disallow: /admin\n" +
 		"Disallow: /api/\n" +
 		"Allow: /\n" +
-		"Sitemap: " + s.cfg.BaseURL + "/sitemap.xml\n"))
+		"Sitemap: " + s.siteBaseURL() + "/sitemap.xml\n"))
 }
