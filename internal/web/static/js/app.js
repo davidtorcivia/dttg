@@ -18,8 +18,25 @@
   // too cramped on a ~1400px laptop, so it's held back until ~1600px+ — a 14" MBP
   // lands on 3, a 1440p+ monitor gets the full 4. (The masonry order stays
   // chronological via grid.__order, so collapsing to fewer columns doesn't scramble it.)
+  // Breakpoints mirror the CSS media queries exactly (600 / 1000 / 1600) so the JS
+  // column count can never disagree with the CSS layout. matchMedia reflects the
+  // current layout viewport and fires a change event the instant a breakpoint is
+  // crossed — more reliable than sampling window.innerWidth on a debounced resize,
+  // which can read a stale (too-wide) value during a view-transition snapshot or
+  // before the mobile viewport has settled, leaving phones on the wide column count.
+  var mq = window.matchMedia ? {
+    small: window.matchMedia('(max-width: 600px)'),
+    med:   window.matchMedia('(max-width: 1000px)'),
+    wide:  window.matchMedia('(min-width: 1600px)')
+  } : null;
   function gridColumnCount(maxCols) {
-    var w = window.innerWidth;
+    if (mq) {
+      if (mq.small.matches) return 1;
+      if (mq.med.matches) return 2;
+      if (!mq.wide.matches) return Math.min(3, maxCols);
+      return maxCols;
+    }
+    var w = window.innerWidth; // fallback: browsers without matchMedia
     if (w <= 600) return 1;
     if (w <= 1000) return 2;
     if (w < 1600) return Math.min(3, maxCols);
@@ -129,11 +146,24 @@
     var grid = document.getElementById('grid');
     if (!grid) return;
     grid.classList.add('grid--cols'); // upgrade from the block fallback to flex columns
+    var relayout = function () { layoutMasonry(grid); };
     layoutMasonry(grid, true);
+    // Re-evaluate the column count whenever a breakpoint is actually crossed, and
+    // again once the page fully loads or is restored from the bfcache (back button).
+    // The first read at end-of-body can be stale on mobile, which was leaving small
+    // phones rendering the wide-screen column count until something forced a relayout.
+    if (mq) {
+      [mq.small, mq.med, mq.wide].forEach(function (m) {
+        if (m.addEventListener) m.addEventListener('change', relayout);
+        else if (m.addListener) m.addListener(relayout); // Safari < 14
+      });
+    }
+    window.addEventListener('load', function () { layoutMasonry(grid, true); });
+    window.addEventListener('pageshow', function (e) { if (e.persisted) layoutMasonry(grid, true); });
     var rt;
     window.addEventListener('resize', function () {
       clearTimeout(rt);
-      rt = setTimeout(function () { layoutMasonry(grid); }, 150);
+      rt = setTimeout(relayout, 150);
     });
   })();
 
@@ -721,6 +751,13 @@
     }
     if (media.tagName === 'VIDEO') media.addEventListener('loadedmetadata', refresh);
     refresh();
+    // The first measurement at end-of-body can land before the mobile layout has
+    // settled (final chrome height / viewport), fitting the media to a wrong height
+    // so it shows too small until an expand→fit cycle re-measures it. Re-run a frame
+    // later, on full load, and on bfcache restore so it self-corrects without a tap.
+    requestAnimationFrame(refresh);
+    window.addEventListener('load', refresh);
+    window.addEventListener('pageshow', function (e) { if (e.persisted) refresh(); });
     window.addEventListener('resize', refresh);
 
     if (btn) {
