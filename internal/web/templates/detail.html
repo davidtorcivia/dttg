@@ -70,12 +70,8 @@
         <div class="info-label">Source</div>
         <div class="info-value"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{$h := host .Item.SourceURL}}{{if $h}}{{$h}}{{else}}Open &#8599;{{end}}</a></div>
         {{- end}}
-        {{- if .Item.Tags}}
-        <div class="info-label">Tags</div>
-        <div class="info-value tags">
-          {{- range .Item.Tags}}<a href="/tag/{{.Slug}}">{{.Name}}</a>{{end}}
-        </div>
-        {{- end}}
+        {{- /* Tags are intentionally not shown in the UI — they remain in the
+               data and power related items + search, but stay invisible here. */}}
       </div>
 
       {{- if and .Item.Note (ne .Item.Kind "text")}}
