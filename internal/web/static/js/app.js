@@ -350,12 +350,12 @@
   // m mute, f fullscreen. stopPropagation keeps them off the detail prev/next nav.
   (function () {
     var SVG = {
-      play:  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 3l9 5-9 5z" fill="currentColor"/></svg>',
-      pause: '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><rect x="4" y="3" width="3" height="10" fill="currentColor"/><rect x="9" y="3" width="3" height="10" fill="currentColor"/></svg>',
-      sound: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 5.4a3 3 0 0 1 0 5.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-      muted: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 6l3.2 4M14.2 6L11 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-      full:  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
-      exit:  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>'
+      play:  '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 3l9 5-9 5z" fill="currentColor"/></svg>',
+      pause: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="4" y="3" width="3" height="10" fill="currentColor"/><rect x="9" y="3" width="3" height="10" fill="currentColor"/></svg>',
+      sound: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 5.4a3 3 0 0 1 0 5.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+      muted: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6h3l4-3v10L5 10H2z" fill="currentColor"/><path d="M11 6l3.2 4M14.2 6L11 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+      full:  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+      exit:  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>'
     };
     var fmt = function (t) {
       if (!isFinite(t) || t < 0) t = 0;
@@ -400,12 +400,31 @@
       v.addEventListener('pause', syncPlay);
       v.addEventListener('volumechange', syncMute);
       document.addEventListener('fullscreenchange', syncFull);
-      v.addEventListener('timeupdate', function () {
-        var d = v.duration || 0, pct = d ? (v.currentTime / d * 100) : 0;
-        fill.style.width = pct + '%';
-        track.setAttribute('aria-valuenow', Math.round(pct));
-        timeEl.textContent = fmt(v.currentTime) + (d ? ' / ' + fmt(d) : '');
-      });
+      // Glide the progress fill on every animation frame (compositor-only scaleX,
+      // not width) instead of stepping at the coarse ~4Hz timeupdate cadence — that
+      // stepping is what made the bar stutter. Text/aria only change once a second.
+      var lastLabel = '';
+      var sync = function () {
+        var d = v.duration || 0, frac = d ? v.currentTime / d : 0;
+        fill.style.transform = 'scaleX(' + frac + ')';
+        var label = fmt(v.currentTime) + (d ? ' / ' + fmt(d) : '');
+        if (label !== lastLabel) {
+          lastLabel = label;
+          timeEl.textContent = label;
+          track.setAttribute('aria-valuenow', Math.round(frac * 100));
+        }
+      };
+      var raf = null;
+      var loop = function () { sync(); raf = requestAnimationFrame(loop); };
+      var startRAF = function () { if (raf === null) raf = requestAnimationFrame(loop); };
+      var stopRAF = function () { if (raf !== null) { cancelAnimationFrame(raf); raf = null; } sync(); };
+      v.addEventListener('play', startRAF);
+      v.addEventListener('playing', startRAF);
+      v.addEventListener('pause', stopRAF);
+      v.addEventListener('ended', stopRAF);
+      v.addEventListener('timeupdate', sync); // keep the bar correct while paused (e.g. after a seek)
+      v.addEventListener('seeked', sync);
+      if (!v.paused) startRAF();              // autoplay: the bar is already moving
       track.addEventListener('click', function (e) {
         var r = track.getBoundingClientRect();
         if (v.duration) v.currentTime = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * v.duration;

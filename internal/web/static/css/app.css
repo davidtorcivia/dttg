@@ -66,7 +66,11 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .grid-col { flex:1 1 0; min-width:0; display:flex; flex-direction:column; }
 .card { display:flex; gap:.8rem; align-items:stretch; margin-bottom:4rem; cursor:pointer; text-decoration:none; color:inherit; opacity:0; transform:translateY(40px); transition:opacity .8s cubic-bezier(.2,.8,.2,1), transform .8s cubic-bezier(.2,.8,.2,1); }
 .card.visible { opacity:1; transform:translateY(0); }
-.card.visible:hover { opacity:.6; transition-duration:.3s; }
+/* Hover: a quick dim (the original ~.3s fade-out), then — if the pointer lingers —
+   a slow drift back to full opacity. Runs once per hover; leaving and re-entering
+   replays it. forwards holds the settled (full) state while still hovered. */
+.card.visible:hover { animation:cardHover 2s var(--ease-out) forwards; }
+@keyframes cardHover { 0% { opacity:1; } 15% { opacity:.6; } 100% { opacity:1; } }
 .card-img-container { flex:1; position:relative; min-width:0; }
 .card-img-container img { width:100%; height:auto; display:block; filter:contrast(1.1); background:var(--line); }
 .card-text { font-weight:300; font-size:1rem; line-height:1.6; padding:.5rem 0; word-break:break-word; }
@@ -275,14 +279,16 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .video-tile .doc-ext { opacity:.85; }
 
 /* ---------- custom video controls (on-brand, slow fade on hover) ---------- */
-.vbar { position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:.7rem; padding:.85rem .8rem .7rem; color:#fff; background:linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0)); opacity:0; pointer-events:none; transition:opacity .6s cubic-bezier(.2,.8,.2,1); }
+.vbar { position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:.85rem; padding:.95rem .95rem .8rem; color:#fff; background:linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0)); opacity:0; pointer-events:none; transition:opacity .6s cubic-bezier(.2,.8,.2,1); }
 .media-stage:hover .vbar, .vbar:focus-within { opacity:1; pointer-events:auto; }
 .vbar-btn { display:inline-flex; align-items:center; justify-content:center; background:none; border:none; padding:0; color:inherit; opacity:.8; transition:opacity .3s; cursor:pointer; }
 .vbar-btn:hover { opacity:1; }
 .vbar-btn svg { display:block; }
-.vbar-track { flex:1; height:2px; background:rgba(255,255,255,.28); position:relative; }
-.vbar-fill { position:absolute; inset:0 auto 0 0; width:0; background:#fff; }
-.vbar-time { font-size:.6rem; letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
+.vbar-track { flex:1; height:3px; background:rgba(255,255,255,.28); position:relative; }
+/* Progress is driven by transform:scaleX (GPU-composited, no per-frame layout) so
+   the JS can update it every animation frame without the bar stuttering. */
+.vbar-fill { position:absolute; inset:0 auto 0 0; width:100%; transform:scaleX(0); transform-origin:left center; background:#fff; will-change:transform; }
+.vbar-time { font-size:.64rem; letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
 .vbar-track:focus-visible { outline:1px solid #fff; outline-offset:3px; }
 .detail-video:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
 /* fullscreen: center the video on black and let it fill (separate rules so an
