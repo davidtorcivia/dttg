@@ -155,6 +155,39 @@ func TestSrcsetEagerAndImageJSONLD(t *testing.T) {
 	}
 }
 
+// A source smaller than the nominal srcset steps must advertise its TRUE width in
+// the descriptors, not the nominal 800w/1600w. Inflated descriptors make a
+// width:auto <img> (the detail cover) apply a density downscale and render tiny.
+func TestSrcsetClampsSmallImage(t *testing.T) {
+	s := newTestServer(t)
+	id, err := s.store.CreateItem(context.Background(), store.Item{
+		Kind: "image", Title: "Small", Visibility: "public",
+		CoverKey: "items/s/full.jpg", ThumbKey: "items/s/thumb.jpg", SmallKey: "items/s/small.jpg",
+		Width:    459, Height: 332, // full + thumb both 459px (no upscale); small caps at 400px
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	h := s.Handler()
+	detail := getReq(t, h, "/item/"+strconv.FormatInt(id, 10)).Body.String()
+
+	for _, want := range []string{
+		"/media/items/s/small.jpg 400w",
+		"/media/items/s/thumb.jpg 459w",
+		"/media/items/s/full.jpg 459w",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail srcset missing clamped descriptor %q", want)
+		}
+	}
+	// the inflated descriptors must be gone for this image
+	for _, bad := range []string{"thumb.jpg 800w", "full.jpg 1600w"} {
+		if strings.Contains(detail, bad) {
+			t.Errorf("detail srcset still has inflated descriptor %q", bad)
+		}
+	}
+}
+
 func TestFeeds(t *testing.T) {
 	s := newTestServer(t)
 	_, _ = s.store.CreateItem(context.Background(), store.Item{Kind: "text", Title: "Feed Item", Visibility: "public"})

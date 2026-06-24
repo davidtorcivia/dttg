@@ -61,6 +61,18 @@ func parseTemplates() (*template.Template, error) {
 		"hasPrefix": strings.HasPrefix,
 		"safeHTML":  func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec // admin/oEmbed-trusted
 		"asset":     func(p string) string { return p + "?v=" + assetVer },
+		// clampW returns the true pixel width of a responsive variant: the nominal
+		// srcset step (400/800/1600) capped to the image's actual width. Variants are
+		// produced with imaging.Fit, which never upscales, so a 459px source yields a
+		// 459px "full.jpg" — labelling it "1600w" makes a width:auto <img> apply a
+		// density downscale and render tiny. Accurate descriptors keep it full size.
+		// width<=0 (unknown dimensions) falls back to the nominal step.
+		"clampW": func(nominal, width int) int {
+			if width > 0 && width < nominal {
+				return width
+			}
+			return nominal
+		},
 	}
 	return template.New("dnttg").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
 }
