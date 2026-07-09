@@ -158,6 +158,65 @@ type Item struct {
 	Tags            []Tag
 }
 
+// ---------- remote feeds / reposts ----------
+
+type RemoteFeed struct {
+	ID            int64
+	FeedURL       string
+	SiteURL       string
+	Title         string
+	Description   string
+	IconURL       string
+	ETag          string
+	LastModified  string
+	LastFetchedAt time.Time
+	LastSuccessAt time.Time
+	LastError     string
+	Active        bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type RemoteFeedItem struct {
+	ID             int64
+	FeedID         int64
+	FeedTitle      string
+	FeedURL        string
+	RemoteID       string
+	URL            string
+	ExternalURL    string
+	Title          string
+	ContentText    string
+	ImageURL       string
+	AttachmentURL  string
+	AttachmentMime string
+	AuthorName     string
+	AuthorURL      string
+	PublishedAt    time.Time
+	FetchedAt      time.Time
+	RawJSON        string
+	RepostedItemID int64
+}
+
+type RemoteFeedItemFilter struct {
+	Limit           int
+	BeforePublished int64
+	BeforeID        int64
+	ActiveOnly      bool
+}
+
+type RemoteFeedUpdate struct {
+	Title         string
+	SiteURL       string
+	Description   string
+	IconURL       string
+	ETag          string
+	LastModified  string
+	LastFetchedAt time.Time
+	LastSuccessAt time.Time
+	LastError     string
+}
+
 // ---------- settings ----------
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
@@ -892,7 +951,10 @@ func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, m
 }
 
 // ResetContent deletes all archive content (items, media, tags, categories)
-// while keeping settings and API tokens. IDs restart from 1.
+// and remote feed cache/reposts while keeping settings, API tokens, and
+// followed remote feed sources. Conditional-fetch validators on kept sources
+// are cleared so the next sync redownloads items instead of accepting a stale 304.
+// IDs restart from 1.
 func (s *Store) ResetContent(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -900,18 +962,25 @@ func (s *Store) ResetContent(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	for _, q := range []string{
+		`DELETE FROM reposts`,
+		`DELETE FROM remote_feed_items`,
 		`DELETE FROM item_tags`,
 		`DELETE FROM media`,
 		`DELETE FROM items`,
 		`DELETE FROM tags`,
 		`DELETE FROM categories`,
+		// Keep remote_feeds rows, but force a full re-fetch after cache wipe.
+		`UPDATE remote_feeds SET
+			etag='', last_modified='',
+			last_fetched_at=0, last_success_at=0, last_error='',
+			updated_at=unixepoch()`,
 	} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
 	// Restart autoincrement IDs from 1 when the sequence table exists (SQLite).
-	for _, name := range []string{"items", "media", "tags", "categories"} {
+	for _, name := range []string{"items", "media", "tags", "categories", "remote_feed_items", "reposts"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name=?`, name); err != nil {
 			// sqlite_sequence may not exist yet on a never-inserted DB; ignore.
 			if !strings.Contains(err.Error(), "no such table") {
@@ -1457,4 +1526,431 @@ func (s *Store) PurgeExpiredPendingShares(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ---------- remote feeds ----------
+
+func scanRemoteFeed(sc rowScanner) (RemoteFeed, error) {
+	var f RemoteFeed
+	var lastFetched, lastSuccess, created, updated int64
+	var active int
+	err := sc.Scan(
+		&f.ID, &f.FeedURL, &f.SiteURL, &f.Title, &f.Description, &f.IconURL,
+		&f.ETag, &f.LastModified, &lastFetched, &lastSuccess, &f.LastError,
+		&active, &created, &updated,
+	)
+	if err != nil {
+		return f, err
+	}
+	f.Active = active != 0
+	if lastFetched > 0 {
+		f.LastFetchedAt = time.Unix(lastFetched, 0).UTC()
+	}
+	if lastSuccess > 0 {
+		f.LastSuccessAt = time.Unix(lastSuccess, 0).UTC()
+	}
+	f.CreatedAt = time.Unix(created, 0).UTC()
+	f.UpdatedAt = time.Unix(updated, 0).UTC()
+	return f, nil
+}
+
+const remoteFeedColumns = `
+	id, feed_url, site_url, title, description, icon_url,
+	etag, last_modified, last_fetched_at, last_success_at, last_error,
+	active, created_at, updated_at`
+
+// AddRemoteFeed inserts a new active feed, reactivates an inactive one, or
+// returns an existing active feed. created=true only on a fresh insert.
+func (s *Store) AddRemoteFeed(ctx context.Context, feedURL string) (*RemoteFeed, bool, error) {
+	feedURL = strings.TrimSpace(feedURL)
+	if feedURL == "" {
+		return nil, false, fmt.Errorf("feed URL is required")
+	}
+	// Existing row?
+	var existing RemoteFeed
+	var lastFetched, lastSuccess, created, updated int64
+	var active int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT`+remoteFeedColumns+` FROM remote_feeds WHERE feed_url=?`, feedURL).Scan(
+		&existing.ID, &existing.FeedURL, &existing.SiteURL, &existing.Title, &existing.Description, &existing.IconURL,
+		&existing.ETag, &existing.LastModified, &lastFetched, &lastSuccess, &existing.LastError,
+		&active, &created, &updated,
+	)
+	if err == nil {
+		existing.Active = active != 0
+		if lastFetched > 0 {
+			existing.LastFetchedAt = time.Unix(lastFetched, 0).UTC()
+		}
+		if lastSuccess > 0 {
+			existing.LastSuccessAt = time.Unix(lastSuccess, 0).UTC()
+		}
+		existing.CreatedAt = time.Unix(created, 0).UTC()
+		existing.UpdatedAt = time.Unix(updated, 0).UTC()
+		if existing.Active {
+			return &existing, false, nil
+		}
+		// Reactivate inactive source.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE remote_feeds SET active=1, updated_at=unixepoch() WHERE id=?`, existing.ID); err != nil {
+			return nil, false, err
+		}
+		existing.Active = true
+		existing.UpdatedAt = time.Now().UTC()
+		return &existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO remote_feeds(feed_url, active) VALUES(?, 1)`, feedURL)
+	if err != nil {
+		return nil, false, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, false, err
+	}
+	f, err := s.GetRemoteFeed(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return f, true, nil
+}
+
+// ListRemoteFeeds returns followed sources; active feeds first, then title, URL.
+func (s *Store) ListRemoteFeeds(ctx context.Context, activeOnly bool) ([]RemoteFeed, error) {
+	q := `SELECT` + remoteFeedColumns + ` FROM remote_feeds`
+	if activeOnly {
+		q += ` WHERE active=1`
+	}
+	q += ` ORDER BY active DESC, title COLLATE NOCASE, feed_url`
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RemoteFeed
+	for rows.Next() {
+		f, err := scanRemoteFeed(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// GetRemoteFeed returns a source by id, or (nil, nil) when missing.
+func (s *Store) GetRemoteFeed(ctx context.Context, id int64) (*RemoteFeed, error) {
+	f, err := scanRemoteFeed(s.db.QueryRowContext(ctx, `
+		SELECT`+remoteFeedColumns+` FROM remote_feeds WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// SetRemoteFeedActive toggles follow state. Missing id returns sql.ErrNoRows.
+func (s *Store) SetRemoteFeedActive(ctx context.Context, id int64, active bool) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE remote_feeds SET active=?, updated_at=unixepoch() WHERE id=?`, b2i(active), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SaveRemoteFeedFetch updates feed metadata and upserts remote items in one tx.
+// Returns the number of input items processed.
+func (s *Store) SaveRemoteFeedFetch(ctx context.Context, feedID int64, upd RemoteFeedUpdate, items []RemoteFeedItem) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	fetched := time.Now().UTC().Unix()
+	if !upd.LastFetchedAt.IsZero() {
+		fetched = upd.LastFetchedAt.Unix()
+	}
+	success := fetched
+	if !upd.LastSuccessAt.IsZero() {
+		success = upd.LastSuccessAt.Unix()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE remote_feeds SET
+			title=?, site_url=?, description=?, icon_url=?,
+			etag=?, last_modified=?,
+			last_fetched_at=?, last_success_at=?, last_error=?,
+			updated_at=unixepoch()
+		WHERE id=?`,
+		upd.Title, upd.SiteURL, upd.Description, upd.IconURL,
+		upd.ETag, upd.LastModified,
+		fetched, success, upd.LastError,
+		feedID); err != nil {
+		return 0, err
+	}
+
+	for i := range items {
+		it := &items[i]
+		pub := fetched
+		if !it.PublishedAt.IsZero() {
+			pub = it.PublishedAt.Unix()
+		}
+		fetchedAt := fetched
+		if !it.FetchedAt.IsZero() {
+			fetchedAt = it.FetchedAt.Unix()
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO remote_feed_items(
+				feed_id, remote_id, url, external_url, title, content_text,
+				image_url, attachment_url, attachment_mime,
+				author_name, author_url, published_at, fetched_at, raw_json)
+			VALUES (?,?,?,?,?,?, ?,?,?, ?,?,?,?,?)
+			ON CONFLICT(feed_id, remote_id) DO UPDATE SET
+				url=excluded.url,
+				external_url=excluded.external_url,
+				title=excluded.title,
+				content_text=excluded.content_text,
+				image_url=excluded.image_url,
+				attachment_url=excluded.attachment_url,
+				attachment_mime=excluded.attachment_mime,
+				author_name=excluded.author_name,
+				author_url=excluded.author_url,
+				published_at=excluded.published_at,
+				fetched_at=excluded.fetched_at,
+				raw_json=excluded.raw_json`,
+			feedID, it.RemoteID, it.URL, it.ExternalURL, it.Title, it.ContentText,
+			it.ImageURL, it.AttachmentURL, it.AttachmentMime,
+			it.AuthorName, it.AuthorURL, pub, fetchedAt, it.RawJSON); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
+
+// SaveRemoteFeedError records a fetch failure without clearing cached items.
+func (s *Store) SaveRemoteFeedError(ctx context.Context, feedID int64, fetchedAt time.Time, msg string) error {
+	ts := time.Now().UTC().Unix()
+	if !fetchedAt.IsZero() {
+		ts = fetchedAt.Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE remote_feeds SET last_fetched_at=?, last_error=?, updated_at=unixepoch()
+		WHERE id=?`, ts, msg, feedID)
+	return err
+}
+
+// MarkRemoteFeedChecked records a successful conditional GET (HTTP 304).
+func (s *Store) MarkRemoteFeedChecked(ctx context.Context, feedID int64, fetchedAt time.Time) error {
+	ts := time.Now().UTC().Unix()
+	if !fetchedAt.IsZero() {
+		ts = fetchedAt.Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE remote_feeds SET last_fetched_at=?, last_error='', updated_at=unixepoch()
+		WHERE id=?`, ts, feedID)
+	return err
+}
+
+// ListRemoteFeedItems returns cached remote items newest-first with optional keyset.
+func (s *Store) ListRemoteFeedItems(ctx context.Context, f RemoteFeedItemFilter) ([]RemoteFeedItem, error) {
+	q := `
+		SELECT ri.id, ri.feed_id, COALESCE(rf.title,''), rf.feed_url, ri.remote_id,
+			ri.url, ri.external_url, ri.title, ri.content_text, ri.image_url,
+			ri.attachment_url, ri.attachment_mime, ri.author_name, ri.author_url,
+			ri.published_at, ri.fetched_at, ri.raw_json,
+			COALESCE(rp.local_item_id, 0)
+		FROM remote_feed_items ri
+		JOIN remote_feeds rf ON rf.id = ri.feed_id
+		LEFT JOIN reposts rp ON rp.remote_feed_item_id = ri.id`
+	var where []string
+	var args []any
+	if f.ActiveOnly {
+		where = append(where, "rf.active=1")
+	}
+	if f.BeforePublished > 0 && f.BeforeID > 0 {
+		where = append(where, `(ri.published_at < ? OR (ri.published_at = ? AND ri.id < ?))`)
+		args = append(args, f.BeforePublished, f.BeforePublished, f.BeforeID)
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY ri.published_at DESC, ri.id DESC"
+	if f.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RemoteFeedItem
+	for rows.Next() {
+		var it RemoteFeedItem
+		var published, fetched int64
+		if err := rows.Scan(
+			&it.ID, &it.FeedID, &it.FeedTitle, &it.FeedURL, &it.RemoteID,
+			&it.URL, &it.ExternalURL, &it.Title, &it.ContentText, &it.ImageURL,
+			&it.AttachmentURL, &it.AttachmentMime, &it.AuthorName, &it.AuthorURL,
+			&published, &fetched, &it.RawJSON, &it.RepostedItemID,
+		); err != nil {
+			return nil, err
+		}
+		it.PublishedAt = time.Unix(published, 0).UTC()
+		it.FetchedAt = time.Unix(fetched, 0).UTC()
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// GetRemoteFeedItem returns one cached item with repost mapping, or (nil, nil).
+func (s *Store) GetRemoteFeedItem(ctx context.Context, id int64) (*RemoteFeedItem, error) {
+	var it RemoteFeedItem
+	var published, fetched int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ri.id, ri.feed_id, COALESCE(rf.title,''), rf.feed_url, ri.remote_id,
+			ri.url, ri.external_url, ri.title, ri.content_text, ri.image_url,
+			ri.attachment_url, ri.attachment_mime, ri.author_name, ri.author_url,
+			ri.published_at, ri.fetched_at, ri.raw_json,
+			COALESCE(rp.local_item_id, 0)
+		FROM remote_feed_items ri
+		JOIN remote_feeds rf ON rf.id = ri.feed_id
+		LEFT JOIN reposts rp ON rp.remote_feed_item_id = ri.id
+		WHERE ri.id=?`, id).Scan(
+		&it.ID, &it.FeedID, &it.FeedTitle, &it.FeedURL, &it.RemoteID,
+		&it.URL, &it.ExternalURL, &it.Title, &it.ContentText, &it.ImageURL,
+		&it.AttachmentURL, &it.AttachmentMime, &it.AuthorName, &it.AuthorURL,
+		&published, &fetched, &it.RawJSON, &it.RepostedItemID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	it.PublishedAt = time.Unix(published, 0).UTC()
+	it.FetchedAt = time.Unix(fetched, 0).UTC()
+	return &it, nil
+}
+
+// CreateRepost creates a public local link item from a remote feed item.
+// Idempotent: existing reposts return the same local_item_id with created=false.
+func (s *Store) CreateRepost(ctx context.Context, remoteItemID int64) (localItemID int64, created bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+
+	// Existing repost?
+	var existingLocal sql.NullInt64
+	err = tx.QueryRowContext(ctx, `
+		SELECT local_item_id FROM reposts WHERE remote_feed_item_id=?`, remoteItemID).Scan(&existingLocal)
+	if err == nil {
+		if existingLocal.Valid {
+			return existingLocal.Int64, false, nil
+		}
+		// Row exists but local item was deleted (ON DELETE SET NULL) — fall through to recreate.
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+
+	var remote RemoteFeedItem
+	var published, fetched int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT ri.id, ri.feed_id, COALESCE(rf.title,''), rf.feed_url, ri.remote_id,
+			ri.url, ri.external_url, ri.title, ri.content_text, ri.image_url,
+			ri.attachment_url, ri.attachment_mime, ri.author_name, ri.author_url,
+			ri.published_at, ri.fetched_at, ri.raw_json
+		FROM remote_feed_items ri
+		JOIN remote_feeds rf ON rf.id = ri.feed_id
+		WHERE ri.id=?`, remoteItemID).Scan(
+		&remote.ID, &remote.FeedID, &remote.FeedTitle, &remote.FeedURL, &remote.RemoteID,
+		&remote.URL, &remote.ExternalURL, &remote.Title, &remote.ContentText, &remote.ImageURL,
+		&remote.AttachmentURL, &remote.AttachmentMime, &remote.AuthorName, &remote.AuthorURL,
+		&published, &fetched, &remote.RawJSON,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, fmt.Errorf("remote item not found")
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	remote.PublishedAt = time.Unix(published, 0).UTC()
+	remote.FetchedAt = time.Unix(fetched, 0).UTC()
+
+	sourceURL := chooseRepostSourceURL(remote)
+	if sourceURL == "" {
+		return 0, false, fmt.Errorf("remote item has no URL to repost")
+	}
+
+	now := time.Now().UTC()
+	createdUnix := now.Unix()
+	res, err := tx.ExecContext(ctx, `INSERT INTO items
+		(kind,title,note,source_url,visibility,category_id,
+		 link_title,link_description,link_site_name,embed_provider,embed_html,
+		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,
+		 file_key,file_name,file_mime,file_size,
+		 created_at,updated_at,published_at)
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+		"link", remote.Title, remote.ContentText, sourceURL, "public", nil,
+		remote.Title, remote.ContentText, remote.FeedTitle, "", "",
+		remote.ImageURL, "", "", "", "", "", 0, 0,
+		"", "", "", 0,
+		createdUnix, createdUnix, createdUnix)
+	if err != nil {
+		return 0, false, err
+	}
+	localID, err := res.LastInsertId()
+	if err != nil {
+		return 0, false, err
+	}
+
+	// Upsert repost mapping (handles re-repost after local item deletion).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO reposts(remote_feed_item_id, local_item_id, created_at)
+		VALUES (?,?,?)
+		ON CONFLICT(remote_feed_item_id) DO UPDATE SET local_item_id=excluded.local_item_id`,
+		remoteItemID, localID, createdUnix); err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return localID, true, nil
+}
+
+func chooseRepostSourceURL(remote RemoteFeedItem) string {
+	for _, candidate := range []string{remote.URL, remote.ExternalURL} {
+		if isAbsoluteHTTPURL(candidate) {
+			return candidate
+		}
+	}
+	if isAbsoluteHTTPURL(remote.RemoteID) {
+		return remote.RemoteID
+	}
+	return ""
+}
+
+func isAbsoluteHTTPURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }

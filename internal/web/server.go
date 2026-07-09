@@ -156,6 +156,14 @@ func (s *Server) Handler() http.Handler {
 	// (a simple GET sends no preflight; the header on the response is enough).
 	mux.HandleFunc("GET /feed.json", s.cors(s.handleFeedJSON))
 	mux.HandleFunc("GET /feed.xml", s.cors(s.handleFeedRSS))
+
+	// Remote feed following + reposts (admin-only; Plan A federation)
+	mux.HandleFunc("GET /feed", s.requireAdmin(s.handleRemoteFeedPage))
+	mux.HandleFunc("POST /feed/sources", s.requireAdmin(s.csrf(s.handleRemoteFeedAddSource)))
+	mux.HandleFunc("POST /feed/sources/{id}/sync", s.requireAdmin(s.csrf(s.handleRemoteFeedFetchSource)))
+	mux.HandleFunc("POST /feed/sources/{id}/unfollow", s.requireAdmin(s.csrf(s.handleRemoteFeedUnfollowSource)))
+	mux.HandleFunc("POST /feed/sync", s.requireAdmin(s.csrf(s.handleRemoteFeedSyncAll)))
+	mux.HandleFunc("POST /feed/items/{id}/repost", s.requireAdmin(s.csrf(s.handleRemoteFeedRepost)))
 	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
 

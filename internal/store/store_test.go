@@ -157,3 +157,184 @@ func TestSessions(t *testing.T) {
 		t.Error("session still valid after delete")
 	}
 }
+
+func TestRemoteFeedUpsertAndList(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	feed, created, err := st.AddRemoteFeed(ctx, "https://peer.example/feed.json")
+	if err != nil {
+		t.Fatalf("AddRemoteFeed: %v", err)
+	}
+	if !created {
+		t.Fatal("expected created=true")
+	}
+	if feed == nil || feed.ID == 0 {
+		t.Fatal("expected feed with id")
+	}
+
+	now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+	older := now.Add(-time.Hour)
+	n, err := st.SaveRemoteFeedFetch(ctx, feed.ID, RemoteFeedUpdate{
+		Title: "Peer", SiteURL: "https://peer.example", Description: "archive",
+		LastFetchedAt: now, LastSuccessAt: now,
+	}, []RemoteFeedItem{
+		{RemoteID: "a", URL: "https://peer.example/item/a", Title: "Alpha", PublishedAt: older, FetchedAt: now},
+		{RemoteID: "b", URL: "https://peer.example/item/b", Title: "Beta", PublishedAt: now, FetchedAt: now},
+	})
+	if err != nil {
+		t.Fatalf("SaveRemoteFeedFetch: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("processed = %d, want 2", n)
+	}
+
+	// Upsert same remote_id with a new title.
+	if _, err := st.SaveRemoteFeedFetch(ctx, feed.ID, RemoteFeedUpdate{
+		Title: "Peer", LastFetchedAt: now, LastSuccessAt: now,
+	}, []RemoteFeedItem{
+		{RemoteID: "a", URL: "https://peer.example/item/a", Title: "Alpha Updated", PublishedAt: older, FetchedAt: now},
+	}); err != nil {
+		t.Fatalf("SaveRemoteFeedFetch upsert: %v", err)
+	}
+
+	items, err := st.ListRemoteFeedItems(ctx, RemoteFeedItemFilter{Limit: 10, ActiveOnly: true})
+	if err != nil {
+		t.Fatalf("ListRemoteFeedItems: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items)=%d, want 2", len(items))
+	}
+	// Newest first by PublishedAt, then ID.
+	if items[0].Title != "Beta" {
+		t.Errorf("first title = %q, want Beta", items[0].Title)
+	}
+	if items[1].Title != "Alpha Updated" {
+		t.Errorf("second title = %q, want Alpha Updated", items[1].Title)
+	}
+}
+
+func TestCreateRepostIsIdempotent(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	feed, _, err := st.AddRemoteFeed(ctx, "https://peer.example/feed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.SaveRemoteFeedFetch(ctx, feed.ID, RemoteFeedUpdate{
+		Title: "Peer Site", LastFetchedAt: now, LastSuccessAt: now,
+	}, []RemoteFeedItem{{
+		RemoteID: "r1", URL: "https://peer.example/item/1", Title: "Remote Title",
+		ContentText: "Remote body", ImageURL: "https://peer.example/img.jpg",
+		PublishedAt: now, FetchedAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.ListRemoteFeedItems(ctx, RemoteFeedItemFilter{Limit: 1})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("seed item: %v len=%d", err, len(items))
+	}
+	remoteID := items[0].ID
+
+	localID, created, err := st.CreateRepost(ctx, remoteID)
+	if err != nil {
+		t.Fatalf("CreateRepost: %v", err)
+	}
+	if !created || localID == 0 {
+		t.Fatalf("first repost created=%v localID=%d", created, localID)
+	}
+
+	localID2, created2, err := st.CreateRepost(ctx, remoteID)
+	if err != nil {
+		t.Fatalf("CreateRepost second: %v", err)
+	}
+	if created2 {
+		t.Error("second repost should not create")
+	}
+	if localID2 != localID {
+		t.Errorf("localID2=%d, want %d", localID2, localID)
+	}
+
+	got, err := st.GetItem(ctx, localID, false)
+	if err != nil || got == nil {
+		t.Fatalf("GetItem: %v %v", got, err)
+	}
+	if got.Kind != "link" || got.Visibility != "public" {
+		t.Errorf("kind/vis = %s/%s", got.Kind, got.Visibility)
+	}
+	if got.SourceURL != "https://peer.example/item/1" {
+		t.Errorf("SourceURL = %q", got.SourceURL)
+	}
+	if got.Title != "Remote Title" {
+		t.Errorf("Title = %q", got.Title)
+	}
+	if got.Note != "Remote body" {
+		t.Errorf("Note = %q", got.Note)
+	}
+	if got.LinkSiteName != "Peer Site" {
+		t.Errorf("LinkSiteName = %q", got.LinkSiteName)
+	}
+	if got.CoverRemoteURL != "https://peer.example/img.jpg" {
+		t.Errorf("CoverRemoteURL = %q", got.CoverRemoteURL)
+	}
+}
+
+func TestResetContentClearsRemoteCacheKeepsSources(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	feed, _, err := st.AddRemoteFeed(ctx, "https://peer.example/feed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.SaveRemoteFeedFetch(ctx, feed.ID, RemoteFeedUpdate{
+		Title: "Peer", ETag: `"v1"`, LastModified: "Mon, 02 Jan 2006 15:04:05 GMT",
+		LastFetchedAt: now, LastSuccessAt: now,
+	}, []RemoteFeedItem{{
+		RemoteID: "x", URL: "https://peer.example/x", Title: "X",
+		PublishedAt: now, FetchedAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := st.ListRemoteFeedItems(ctx, RemoteFeedItemFilter{Limit: 1})
+	if len(items) != 1 {
+		t.Fatal("expected remote item")
+	}
+	if _, _, err := st.CreateRepost(ctx, items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := st.CountItems(ctx, true); n != 1 {
+		t.Fatalf("items before reset = %d", n)
+	}
+
+	if err := st.ResetContent(ctx); err != nil {
+		t.Fatalf("ResetContent: %v", err)
+	}
+
+	feeds, err := st.ListRemoteFeeds(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feeds) != 1 || feeds[0].FeedURL != "https://peer.example/feed.json" {
+		t.Fatalf("feeds after reset = %+v", feeds)
+	}
+	if feeds[0].ETag != "" || feeds[0].LastModified != "" {
+		t.Fatalf("validators not cleared: etag=%q last_modified=%q", feeds[0].ETag, feeds[0].LastModified)
+	}
+	if !feeds[0].LastFetchedAt.IsZero() || !feeds[0].LastSuccessAt.IsZero() {
+		t.Fatalf("fetch timestamps not cleared: fetched=%v success=%v", feeds[0].LastFetchedAt, feeds[0].LastSuccessAt)
+	}
+	left, err := st.ListRemoteFeedItems(ctx, RemoteFeedItemFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("remote items after reset = %d", len(left))
+	}
+	if n, _ := st.CountItems(ctx, true); n != 0 {
+		t.Fatalf("items after reset = %d", n)
+	}
+}

@@ -484,3 +484,194 @@ func TestHelpers(t *testing.T) {
 		t.Errorf("hostname = %q", got)
 	}
 }
+
+func TestRemoteFeedPageRequiresAdmin(t *testing.T) {
+	s := newTestServer(t)
+	h := s.Handler()
+
+	rec := getReq(t, h, "/feed")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("anon status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/login?next=%2Ffeed" {
+		t.Errorf("anon Location = %q", loc)
+	}
+
+	sid := "feed-admin"
+	if err := s.store.CreateSession(context.Background(), HashSession(sid), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/feed", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("admin status = %d", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "https://example.com/feed.json") {
+		t.Error("admin page missing follow form placeholder")
+	}
+}
+
+func TestRemoteJSONFeedParser(t *testing.T) {
+	body := []byte(`{
+		"version": "https://jsonfeed.org/version/1.1",
+		"title": "Peer Archive",
+		"home_page_url": "https://peer.example/",
+		"items": [
+			{
+				"id": "1",
+				"url": "/item/1",
+				"external_url": "https://peer.example/src",
+				"title": "Relative",
+				"content_text": "hello",
+				"date_published": "2026-01-02T15:04:05Z",
+				"image": "/img/a.jpg"
+			},
+			{
+				"id": "2",
+				"url": "javascript:alert(1)",
+				"title": "Bad scheme",
+				"date_published": "2026-01-01T00:00:00Z"
+			},
+			{
+				"id": "",
+				"url": "https://peer.example/skip",
+				"title": "Blank id"
+			}
+		]
+	}`)
+	fetched := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	parsed, err := parseRemoteJSONFeed("https://peer.example/feed.json", body, fetched)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.Update.Title != "Peer Archive" {
+		t.Errorf("title = %q", parsed.Update.Title)
+	}
+	if len(parsed.Items) != 2 {
+		t.Fatalf("items = %d, want 2 (blank id skipped)", len(parsed.Items))
+	}
+	a := parsed.Items[0]
+	if a.URL != "https://peer.example/item/1" {
+		t.Errorf("relative URL = %q", a.URL)
+	}
+	if a.ImageURL != "https://peer.example/img/a.jpg" {
+		t.Errorf("relative image = %q", a.ImageURL)
+	}
+	b := parsed.Items[1]
+	if b.URL != "" {
+		t.Errorf("javascript URL should be empty, got %q", b.URL)
+	}
+}
+
+func TestRemoteFeedRepostFlow(t *testing.T) {
+	s := newTestServer(t)
+	// csrfToken needs a non-nil key
+	s.csrfKey = []byte("0123456789abcdef0123456789abcdef")
+	ctx := context.Background()
+	sid := "repost-sess"
+	if err := s.store.CreateSession(ctx, HashSession(sid), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	feed, _, err := s.store.AddRemoteFeed(ctx, "https://peer.example/feed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := s.store.SaveRemoteFeedFetch(ctx, feed.ID, store.RemoteFeedUpdate{
+		Title: "Peer", LastFetchedAt: now, LastSuccessAt: now,
+	}, []store.RemoteFeedItem{{
+		RemoteID: "r1", URL: "https://peer.example/item/1",
+		Title: "Repost Me", ContentText: "body",
+		PublishedAt: now, FetchedAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.store.ListRemoteFeedItems(ctx, store.RemoteFeedItemFilter{Limit: 1})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("seed: %v len=%d", err, len(items))
+	}
+	remoteID := items[0].ID
+	h := s.Handler()
+
+	// Missing CSRF -> 403
+	req := httptest.NewRequest(http.MethodPost, "/feed/items/"+strconv.FormatInt(remoteID, 10)+"/repost", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("repost without CSRF status = %d", rec.Code)
+	}
+
+	// With CSRF -> redirect to local item
+	form := url.Values{"csrf_token": {s.csrfToken(sid)}}
+	req2 := httptest.NewRequest(http.MethodPost, "/feed/items/"+strconv.FormatInt(remoteID, 10)+"/repost", strings.NewReader(form.Encode()))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req2.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusSeeOther {
+		t.Fatalf("repost status = %d body=%s", rec2.Code, rec2.Body.String())
+	}
+	loc := rec2.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/item/") {
+		t.Fatalf("repost Location = %q", loc)
+	}
+	localID, _ := strconv.ParseInt(strings.TrimPrefix(loc, "/item/"), 10, 64)
+	if localID == 0 {
+		t.Fatal("expected local item id")
+	}
+
+	// Other mutating POSTs reject missing CSRF
+	for _, path := range []string{
+		"/feed/sources",
+		"/feed/sources/" + strconv.FormatInt(feed.ID, 10) + "/sync",
+		"/feed/sources/" + strconv.FormatInt(feed.ID, 10) + "/unfollow",
+		"/feed/sync",
+	} {
+		r := httptest.NewRequest(http.MethodPost, path, nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("%s without CSRF status = %d", path, rr.Code)
+		}
+	}
+
+	// GET /feed shows Reposted
+	req3 := httptest.NewRequest(http.MethodGet, "/feed", nil)
+	req3.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("feed page status = %d", rec3.Code)
+	}
+	if !strings.Contains(rec3.Body.String(), "Reposted") {
+		t.Error("feed page missing Reposted marker")
+	}
+
+	// Public feed.json contains the repost
+	var feedJSON struct {
+		Items []struct {
+			Title       string `json:"title"`
+			ExternalURL string `json:"external_url"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(getReq(t, h, "/feed.json").Body.Bytes(), &feedJSON); err != nil {
+		t.Fatalf("feed.json: %v", err)
+	}
+	found := false
+	for _, it := range feedJSON.Items {
+		if it.Title == "Repost Me" {
+			found = true
+			if it.ExternalURL != "https://peer.example/item/1" {
+				t.Errorf("external_url = %q", it.ExternalURL)
+			}
+		}
+	}
+	if !found {
+		t.Error("feed.json missing repost title")
+	}
+}
