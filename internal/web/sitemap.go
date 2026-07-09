@@ -38,12 +38,16 @@ type sitemapIndex struct {
 // the item count exceeds one chunk it becomes a <sitemapindex> pointing at child
 // sitemaps (/sitemap.xml?p=N), each a urlset of up to sitemapChunk items.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
+	if s.feedNotModified(w, r) {
+		return
+	}
 	total, err := s.store.CountItems(r.Context(), false)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	s.setFeedCacheHeaders(w, r)
 
 	page := r.URL.Query().Get("p")
 	switch {

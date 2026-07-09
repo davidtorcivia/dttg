@@ -23,10 +23,16 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   const title = tab && tab.title;
   let payload = null;
   switch (info.menuItemId) {
-    case "save-image":
+    case "save-image": {
+      const src = info.srcUrl || "";
+      if (/^(data:|blob:|moz-extension:|chrome:|about:|file:)/i.test(src)) {
+        notify("Save failed", "Unsupported image URL (data/blob/privileged). Open the image on the web and try again.");
+        return;
+      }
       // only that image, but linked back to the page it's on (the tweet, etc.)
-      payload = { kind: "image", url: info.srcUrl, source: cleanSource(info.pageUrl || (tab && tab.url)), title };
+      payload = { kind: "image", url: src, source: cleanSource(info.pageUrl || (tab && tab.url)), title };
       break;
+    }
     case "save-link":
       payload = { url: cleanSource(info.linkUrl), title: info.linkText || title };
       break;
@@ -62,6 +68,11 @@ function cleanSource(url) {
 function notify(title, message) {
   if (!browser.notifications) return; // unavailable on some platforms (e.g. Android)
   browser.notifications
-    .create({ type: "basic", title, message: message || "" })
+    .create({
+      type: "basic",
+      iconUrl: browser.runtime.getURL("icons/icon-96.png"),
+      title,
+      message: message || "",
+    })
     .catch(() => {});
 }

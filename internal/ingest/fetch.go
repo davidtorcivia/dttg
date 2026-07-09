@@ -21,6 +21,9 @@ type fetchResult struct {
 }
 
 func (s *Service) fetch(ctx context.Context, rawurl string) (*fetchResult, error) {
+	if _, err := validateFetchURL(rawurl); err != nil {
+		return nil, fmt.Errorf("fetch blocked: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
 	if err != nil {
 		return nil, err
@@ -35,9 +38,16 @@ func (s *Service) fetch(ctx context.Context, rawurl string) (*fetchResult, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: status %d", rawurl, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownload))
+	if resp.ContentLength > maxDownload {
+		return nil, fmt.Errorf("download too large: Content-Length %d", resp.ContentLength)
+	}
+	// Read at most maxDownload+1 so we can detect truncation without storing it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownload+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(body)) > maxDownload {
+		return nil, fmt.Errorf("download too large")
 	}
 	ct := resp.Header.Get("Content-Type")
 	if i := strings.IndexByte(ct, ';'); i >= 0 {

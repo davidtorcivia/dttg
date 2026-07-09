@@ -62,16 +62,16 @@ func backfillVariants(ctx context.Context, st *store.Store, ms media.Store) erro
 			continue
 		}
 		smallKey := fmt.Sprintf("items/%s/small.jpg", asset)
-		if err := ms.Put(ctx, smallKey, "image/jpeg", bytes.NewReader(proc.SmallJPEG)); err != nil {
+		if err := ms.Put(ctx, smallKey, "image/jpeg", int64(len(proc.SmallJPEG)), bytes.NewReader(proc.SmallJPEG)); err != nil {
 			log.Printf("item %d: put small: %v", it.ID, err)
 			skipped++
 			continue
 		}
-		if _, err := st.AddMedia(ctx, store.Media{
+		if err := st.UpsertMedia(ctx, store.Media{
 			ItemID: it.ID, Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg",
 			Bytes: int64(len(proc.SmallJPEG)), OnLocal: !ms.Mirrors(smallKey), OnR2: ms.Mirrors(smallKey),
 		}); err != nil {
-			log.Printf("item %d: add media: %v", it.ID, err)
+			log.Printf("item %d: upsert media: %v", it.ID, err)
 			skipped++
 			continue
 		}

@@ -52,14 +52,16 @@ func (s *Server) scanOrphans(ctx context.Context) (maintenanceReport, error) {
 			rep.OrphanBytes += o.Size
 		}
 	}
-	// broken items: a primary media key is set but its blob is missing from storage
-	items, err := s.store.ListItems(ctx, store.ItemFilter{IncludePrivate: true})
+	// broken items: primary media key set but blob missing — use slim projection
+	keys, err := s.store.ListItemMediaKeys(ctx, true)
 	if err != nil {
 		return rep, err
 	}
-	for _, it := range items {
-		if (it.CoverKey != "" && !present[it.CoverKey]) || (it.FileKey != "" && !present[it.FileKey]) {
-			rep.BrokenItems = append(rep.BrokenItems, s.view(it))
+	for _, k := range keys {
+		if (k.CoverKey != "" && !present[k.CoverKey]) || (k.FileKey != "" && !present[k.FileKey]) {
+			if it, gerr := s.store.GetItem(ctx, k.ID, true); gerr == nil && it != nil {
+				rep.BrokenItems = append(rep.BrokenItems, s.view(*it))
+			}
 		}
 	}
 	// media rows with no parent item
@@ -104,5 +106,6 @@ func (s *Server) handleMaintenanceCleanup(w http.ResponseWriter, r *http.Request
 		_ = s.media.Delete(ctx, m.StorageKey)
 		_ = s.store.DeleteMediaRow(ctx, m.ID)
 	}
+	s.invalidateSiteCache()
 	http.Redirect(w, r, "/admin/maintenance", http.StatusSeeOther)
 }

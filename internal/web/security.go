@@ -6,9 +6,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"html"
+	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+
+	nethtml "golang.org/x/net/html"
 )
 
 // csrfToken derives a per-session CSRF token (HMAC of the session id), so no
@@ -69,6 +74,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=()")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		if s.cfg.HTTPSBase() {
 			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
@@ -77,14 +83,17 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// contentSecurityPolicy is intentionally NOT a strict (nonce/'strict-dynamic')
-// policy: the site runs behind Cloudflare, whose Rocket Loader + injected scripts
-// (analytics beacon, email obfuscation) are same-origin /cdn-cgi/ assets with no
-// nonce, and strict-dynamic would block them — which kills ALL JS. So script-src
-// allows 'self' + same-origin + https + inline, while the other directives still
-// lock down framing, objects, base-uri and form actions. (nonce kept unused for a
-// possible future strict policy if Rocket Loader is disabled.)
-func contentSecurityPolicy(_ string) string {
+// contentSecurityPolicy is a strict nonce-backed policy for scripts. Inline app
+// scripts (theme bootstrap, JSON-LD) and the sanitized tracking snippet must
+// carry the per-request nonce. style-src keeps 'unsafe-inline' for template
+// card colors / column counts. If Cloudflare Rocket Loader injects scripts that
+// break under this policy, disable Rocket Loader for the hostname rather than
+// reopening script-src to 'unsafe-inline' or https:.
+func contentSecurityPolicy(nonce string) string {
+	scriptSrc := "script-src 'self'"
+	if nonce != "" {
+		scriptSrc += " 'nonce-" + nonce + "'"
+	}
 	return strings.Join([]string{
 		"default-src 'self'",
 		"base-uri 'self'",
@@ -95,7 +104,7 @@ func contentSecurityPolicy(_ string) string {
 		"media-src 'self' https:",
 		"font-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
-		"script-src 'self' 'unsafe-inline' https:",
+		scriptSrc,
 		"frame-src https://www.youtube.com https://www.youtube-nocookie.com https://youtube.com https://player.vimeo.com",
 		"connect-src 'self' https:",
 	}, "; ")
@@ -117,11 +126,101 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-// injectNonce adds the CSP nonce to every <script ...> in trusted admin HTML (the
-// analytics snippet) so it's allowed under the strict script-src.
-func injectNonce(html, nonce string) string {
-	if nonce == "" || html == "" {
-		return html
+// sanitizeTrackingSnippet parses an admin-provided analytics snippet and emits
+// only external <script src="http(s)://..."> tags. Inline script bodies,
+// non-script tags, and disallowed attributes are dropped. A CSP nonce is added
+// to each emitted tag. Returns empty HTML when nothing valid remains.
+func sanitizeTrackingSnippet(snippet, nonce string) template.HTML {
+	if strings.TrimSpace(snippet) == "" {
+		return ""
 	}
-	return strings.ReplaceAll(html, "<script", `<script nonce="`+nonce+`"`)
+	nodes, err := nethtml.ParseFragment(strings.NewReader(snippet), &nethtml.Node{
+		Type:     nethtml.ElementNode,
+		Data:     "div",
+		DataAtom: 0,
+	})
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	var walk func(*nethtml.Node)
+	walk = func(n *nethtml.Node) {
+		if n.Type == nethtml.ElementNode && strings.EqualFold(n.Data, "script") {
+			if tag := emitSafeTrackingScript(n, nonce); tag != "" {
+				b.WriteString(tag)
+			}
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for _, n := range nodes {
+		walk(n)
+	}
+	return template.HTML(b.String()) //nolint:gosec // attributes escaped; only allowlisted tags
+}
+
+func emitSafeTrackingScript(n *nethtml.Node, nonce string) string {
+	var src string
+	type attr struct{ key, val string }
+	var keep []attr
+	for _, a := range n.Attr {
+		key := strings.ToLower(strings.TrimSpace(a.Key))
+		val := strings.TrimSpace(a.Val)
+		switch {
+		case key == "src":
+			src = val
+		case key == "async" || key == "defer":
+			keep = append(keep, attr{key: key})
+		case key == "type" || key == "crossorigin" || key == "referrerpolicy":
+			if val != "" {
+				keep = append(keep, attr{key: key, val: val})
+			}
+		case strings.HasPrefix(key, "data-") && key != "data-":
+			keep = append(keep, attr{key: key, val: val})
+		}
+	}
+	if !validTrackingSrc(src) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<script")
+	if nonce != "" {
+		b.WriteString(` nonce="`)
+		b.WriteString(html.EscapeString(nonce))
+		b.WriteString(`"`)
+	}
+	b.WriteString(` src="`)
+	b.WriteString(html.EscapeString(src))
+	b.WriteString(`"`)
+	for _, a := range keep {
+		b.WriteByte(' ')
+		b.WriteString(a.key)
+		if a.val != "" {
+			b.WriteString(`="`)
+			b.WriteString(html.EscapeString(a.val))
+			b.WriteString(`"`)
+		}
+	}
+	b.WriteString("></script>")
+	return b.String()
+}
+
+func validTrackingSrc(src string) bool {
+	u, err := url.Parse(src)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	switch scheme {
+	case "https":
+		return true
+	case "http":
+		// Dev-only: allow plain http for local analytics collectors.
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	default:
+		return false
+	}
 }

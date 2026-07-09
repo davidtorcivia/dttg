@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
 
 	"donottouchtheglass/internal/media"
 	"donottouchtheglass/internal/store"
@@ -27,8 +30,29 @@ func reconcile(ctx context.Context, st *store.Store, ms media.Store) error {
 			log.Printf("skip %s: %v", m.StorageKey, err)
 			continue
 		}
-		err = mirror.PutR2(ctx, m.StorageKey, m.ContentType, rc)
-		rc.Close()
+		// Prefer the actual local file size; DB bytes can be stale.
+		size := int64(-1)
+		if f, ok := rc.(*os.File); ok {
+			if st, serr := f.Stat(); serr == nil {
+				size = st.Size()
+			}
+		}
+		if size < 0 && m.Bytes > 0 {
+			size = m.Bytes
+		}
+		if size < 0 {
+			data, rerr := io.ReadAll(rc)
+			rc.Close()
+			if rerr != nil {
+				log.Printf("skip %s: %v", m.StorageKey, rerr)
+				continue
+			}
+			size = int64(len(data))
+			err = mirror.PutR2(ctx, m.StorageKey, m.ContentType, size, bytes.NewReader(data))
+		} else {
+			err = mirror.PutR2(ctx, m.StorageKey, m.ContentType, size, rc)
+			rc.Close()
+		}
 		if err != nil {
 			log.Printf("upload %s: %v", m.StorageKey, err)
 			continue

@@ -6,8 +6,10 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="admin admin-form">
     <h1>Settings</h1>
+    {{if .Error}}<div class="flash flash-error" role="status">{{.Error}}</div>{{end}}
 
     <form method="POST" action="/admin/settings">{{template "csrf" .}}
       <label>Site title
@@ -34,8 +36,8 @@
         </select>
       </label>
       <label>Analytics / tracking snippet
-        <span>Pasted raw into the &lt;head&gt; of public pages only (Umami, Plausible, etc.). Leave blank to disable.</span>
-        <textarea name="tracking_script" rows="6" class="mono" placeholder="Paste your analytics script tag here">{{.Settings.Tracking}}</textarea>
+        <span>External &lt;script src="https://…"&gt; only (Umami, Plausible, etc.). Inline scripts are rejected. Leave blank to disable.</span>
+        <textarea name="tracking_script" rows="6" class="mono" placeholder='&lt;script async src="https://…" data-website-id="…"&gt;&lt;/script&gt;'>{{.Settings.Tracking}}</textarea>
       </label>
       <div class="form-actions"><button type="submit">Save settings</button> <a href="/admin">Back</a></div>
     </form>
@@ -55,6 +57,34 @@
     </div>
 
     <div class="settings-section">
+      <h2>API tokens</h2>
+      <p class="muted">Tokens for the Firefox extension and bookmarklet. Plaintext values are shown only once at mint time (<code>dnttg token mint</code>). Revoking immediately rejects the token.</p>
+      {{if .Settings.Tokens}}
+      <table class="admin-table tokens-table">
+        <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+        <tbody>
+        {{- range .Settings.Tokens}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td>{{longDate .CreatedAt}}</td>
+            <td>{{if .LastUsedAt}}{{longDate .LastUsedAt}}{{else}}—{{end}}</td>
+            <td>
+              <form method="POST" action="/admin/tokens/revoke" class="inline-form" onsubmit="return confirm('Revoke token {{.Name}}?');">
+                {{template "csrf" $}}
+                <input type="hidden" name="id" value="{{.ID}}">
+                <button type="submit" class="btn-link">Revoke</button>
+              </form>
+            </td>
+          </tr>
+        {{- end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="muted">No tokens yet. Run <code>dnttg token mint firefox</code> on the server.</p>
+      {{end}}
+    </div>
+
+    <div class="settings-section">
       <h2>Maintenance</h2>
       <p class="muted">Scan storage + the database for orphaned media files, broken items (media missing), and stray rows — then review before deleting.</p>
       <p><a class="btn" href="/admin/maintenance">Scan for orphans</a></p>
@@ -67,6 +97,7 @@
       <p class="muted">Firefox extension: load <code>extension/</code> via <code>about:debugging</code> → “Load Temporary Add-on”, then set this server's URL and an API token (<code>dnttg token firefox</code>) in its options. The same extension runs on Firefox for Android.</p>
     </div>
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

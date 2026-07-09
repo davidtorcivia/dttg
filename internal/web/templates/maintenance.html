@@ -6,11 +6,12 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="admin admin-form">
     <h1>Maintenance</h1>
     {{- with .Maintenance}}
     {{- if .ScanError}}
-    <p class="login-error">Scan failed: {{.ScanError}}</p>
+    <p class="flash flash-error" role="status">Scan failed: {{.ScanError}}</p>
     <p class="muted">Nothing was changed. If R2 is configured, check its credentials/connectivity and try again.</p>
     <a href="/admin/settings" class="back-btn">&larr; Back to settings</a>
     {{- else if .Empty}}
@@ -53,6 +54,7 @@
     {{- end}}
     {{- end}}
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

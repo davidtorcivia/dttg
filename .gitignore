@@ -8,6 +8,7 @@
 /dnttg
 /dnttg.exe
 /dist/
+/web-ext-artifacts/
 
 # secrets / local env / deploy notes (handed to the server-side agent out of band)
 .env

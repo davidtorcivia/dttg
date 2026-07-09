@@ -33,10 +33,11 @@ func syntheticJPEG(t *testing.T, c color.Color) []byte {
 func seedImageItems(t *testing.T, s *Server, n int) {
 	t.Helper()
 	ctx := context.Background()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := "items/og" + strconv.Itoa(i) + "/full.jpg"
 		col := color.RGBA{uint8(30 + i*25), 90, uint8(180 - i*12), 255}
-		if err := s.media.Put(ctx, key, "image/jpeg", bytes.NewReader(syntheticJPEG(t, col))); err != nil {
+		jpegBytes := syntheticJPEG(t, col)
+		if err := s.media.Put(ctx, key, "image/jpeg", int64(len(jpegBytes)), bytes.NewReader(jpegBytes)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.store.CreateItem(ctx, store.Item{

@@ -230,6 +230,25 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .search-toggle { display:inline-flex; align-items:center; justify-content:center; color:inherit; transition:opacity .3s; }
 .search-toggle:hover { opacity:.5; }
 .search-toggle svg { display:block; }
+.search-toggle, .theme-toggle, .pwa-login {
+  min-width: 44px;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.board-retry {
+  display: block;
+  margin: 1rem auto 2rem;
+  padding: .6rem 1rem;
+  font: inherit;
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  background: none;
+  border: 1px solid var(--muted);
+  color: var(--text);
+  cursor: pointer;
+}
+.board-retry:hover { border-color: var(--text); }
 
 .search-overlay { position:fixed; inset:0; z-index:9000; display:flex; align-items:flex-start; justify-content:center; padding:14vh 1.5rem 2rem; background:rgba(255,255,255,.8); -webkit-backdrop-filter:blur(18px); backdrop-filter:blur(18px); opacity:0; visibility:hidden; transition:opacity .3s ease, visibility .3s ease; }
 .search-overlay.open { opacity:1; visibility:visible; }
@@ -290,6 +309,11 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .vbar-fill { position:absolute; inset:0 auto 0 0; width:100%; transform:scaleX(0); transform-origin:left center; background:#fff; will-change:transform; }
 .vbar-time { font-size:.64rem; letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
 .vbar-track:focus-visible { outline:1px solid #fff; outline-offset:3px; }
+@media (pointer: coarse) {
+  .media-stage .vbar { opacity: 1; pointer-events: auto; }
+  .vbar-track { height: 12px; }
+  .vbar-btn { min-width: 44px; min-height: 44px; }
+}
 .detail-video:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
 /* fullscreen: center the video on black and let it fill (separate rules so an
    unknown pseudo in one engine doesn't invalidate the other) */

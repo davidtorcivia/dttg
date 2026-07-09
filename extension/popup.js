@@ -86,12 +86,30 @@ async function submit(e) {
   const visibility = $("visibility").value;
   const payload = {
     url: $("url").value.trim(),
-    title: $("title").value,
-    note: $("note").value,
+    title: $("title").value.trim(),
+    note: $("note").value.trim(),
     category: $("category").value.trim(),
     tags: $("tags").value.split(",").map((s) => s.trim()).filter(Boolean),
     visibility,
   };
+  if (!payload.url && !payload.title && !payload.note) {
+    status.textContent = "Enter a URL, title, or note.";
+    status.className = "err";
+    btn.disabled = false;
+    return;
+  }
+  // Privileged/prefilled tabs (about:, moz-extension:, etc.) leave a non-http URL.
+  // Drop it when title/note is present so note-only saves still work.
+  if (payload.url && !/^https?:\/\//i.test(payload.url)) {
+    if (payload.title || payload.note) {
+      payload.url = "";
+    } else {
+      status.textContent = "URL must start with http:// or https://";
+      status.className = "err";
+      btn.disabled = false;
+      return;
+    }
+  }
 
   try {
     await saveItem(payload);

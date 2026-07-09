@@ -40,7 +40,7 @@ easter eggs.
 
 ## Quick start (local dev)
 
-Requires Go 1.24+ (the module targets a recent toolchain for `crypto/pbkdf2`).
+Requires Go 1.25+ (see `go.mod`).
 
 ```sh
 # from the repo root
@@ -58,12 +58,17 @@ Data lives in `./data` (SQLite + media), which is git-ignored.
 | --- | --- |
 | `dnttg serve` | Run the HTTP server (default if no subcommand). |
 | `dnttg migrate` | Apply migrations and exit. |
+| `dnttg ready` | Exit 0 when the DB is reachable (Docker healthcheck). |
 | `dnttg seed` | Download + refine demo content if the archive is empty. |
 | `dnttg reconcile` | Push local-only refined variants up to R2 (backfill). |
+| `dnttg backfill-variants` | Generate the ~400px small variant for older images. |
+| `dnttg localize-private-media` | Pull private media off R2 onto local disk only. |
 | `dnttg backup` | Snapshot the DB to the private R2 backups bucket (+ prune old). |
 | `dnttg reset-content` | Delete all items/media/tags/categories (keeps password + tokens). |
-| `dnttg set-password <pw>` | Set/replace the admin login password. |
-| `dnttg token [name]` | Mint an API token for the extension/bookmarklet (shown once). |
+| `dnttg set-password` | Set password from stdin (prompt if TTY). Arg form works but is less safe. |
+| `dnttg token [name]` / `mint` | Mint an API token for the extension/bookmarklet (shown once). |
+| `dnttg token list` | List token names and last-used times (never re-shows secrets). |
+| `dnttg token revoke <id\|name>` | Revoke a token by id or exact name. |
 
 ## Admin & API
 
@@ -109,6 +114,10 @@ into the archive.
 All config is environment-driven; see [`.env.example`](.env.example). Media URLs
 resolve to `DNTTG_MEDIA_BASE_URL` (the R2 custom domain) when set, otherwise the
 local `/media` path — so the same DB works with or without R2.
+
+`DNTTG_TRUST_PROXY=1` must be set **only** behind a trusted reverse proxy or
+tunnel that overwrites `X-Forwarded-For` / `X-Real-IP`. Client-supplied values
+are spoofable and would poison rate limits and login throttles.
 
 > **Deployment / infrastructure specifics** (real domains, R2 bucket + custom
 > domain, Cloudflare tunnel, server env, secrets) are intentionally **not** in

@@ -1,8 +1,11 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -29,6 +32,9 @@ func itemTitleOr(it store.Item) string {
 }
 
 func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
+	if s.feedNotModified(w, r) {
+		return
+	}
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
 	type jfAttachment struct {
 		URL         string `json:"url"`
@@ -65,6 +71,7 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 		arr = append(arr, item)
 	}
 	w.Header().Set("Content-Type", "application/feed+json; charset=utf-8")
+	s.setFeedCacheHeaders(w, r)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version":       "https://jsonfeed.org/version/1.1",
 		"title":         s.siteTitle(),
@@ -75,6 +82,9 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
+	if s.feedNotModified(w, r) {
+		return
+	}
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
 	type rssEnclosure struct {
 		URL    string `xml:"url,attr"`
@@ -128,8 +138,43 @@ func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 		doc.Channel.Items = append(doc.Channel.Items, ri)
 	}
 	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+	s.setFeedCacheHeaders(w, r)
 	_, _ = w.Write([]byte(xml.Header))
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
 	_ = enc.Encode(doc)
+}
+
+// feedETag is derived from public item count, max(updated_at), and site identity
+// so settings changes (title/base_url) invalidate caches.
+func (s *Server) feedETag(r *http.Request) string {
+	n, maxU, err := s.store.PublicRevision(r.Context())
+	if err != nil {
+		return ""
+	}
+	id := s.siteID()
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%s|%s", n, maxU, id.Title, id.BaseURL, id.Description)))
+	return `W/"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+func (s *Server) setFeedCacheHeaders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	if et := s.feedETag(r); et != "" {
+		w.Header().Set("ETag", et)
+	}
+}
+
+// feedNotModified writes 304 when If-None-Match matches the current revision.
+func (s *Server) feedNotModified(w http.ResponseWriter, r *http.Request) bool {
+	et := s.feedETag(r)
+	if et == "" {
+		return false
+	}
+	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == et {
+		w.Header().Set("ETag", et)
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	return false
 }

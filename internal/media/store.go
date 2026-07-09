@@ -22,7 +22,9 @@ type ObjectInfo struct {
 // Store is a content-addressed-ish blob store keyed by a forward-slash relative
 // key such as "items/42/full.webp".
 type Store interface {
-	Put(ctx context.Context, key, contentType string, r io.Reader) error
+	// Put stores a blob. size should be the exact byte length when known (required
+	// for efficient R2 uploads); pass -1 only when the size is genuinely unknown.
+	Put(ctx context.Context, key, contentType string, size int64, r io.Reader) error
 	Open(key string) (io.ReadCloser, error)
 	URL(key string) string
 	Delete(ctx context.Context, key string) error
@@ -50,7 +52,7 @@ func (l *LocalStore) path(key string) string {
 	return filepath.Join(l.Root, filepath.FromSlash(key))
 }
 
-func (l *LocalStore) Put(_ context.Context, key, _ string, r io.Reader) error {
+func (l *LocalStore) Put(_ context.Context, key, _ string, _ int64, r io.Reader) error {
 	p := l.path(key)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -62,6 +64,11 @@ func (l *LocalStore) Put(_ context.Context, key, _ string, r io.Reader) error {
 	defer f.Close()
 	_, err = io.Copy(f, r)
 	return err
+}
+
+// PutPrivate writes a blob for a private item. Local-only; never mirrored.
+func (l *LocalStore) PutPrivate(ctx context.Context, key, contentType string, r io.Reader, size int64) error {
+	return l.Put(ctx, key, contentType, size, r)
 }
 
 func (l *LocalStore) Open(key string) (io.ReadCloser, error) { return os.Open(l.path(key)) }

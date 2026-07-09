@@ -8,17 +8,20 @@
 </head>
 <body>
   {{template "sysheader" .}}
-  <span id="maincontent" tabindex="-1"></span>
+  <main id="maincontent" tabindex="-1">
+    <h1 class="visually-hidden">{{if .ActiveCat}}{{.ActiveCat}}{{else if .ActiveTag}}#{{.ActiveTag}}{{else}}Archive{{end}}</h1>
+    {{template "category_nav" .}}
 
-  <div class="grid" id="grid" style="--cols:{{.BoardColumns}}">
-    {{- range .Items}}
-    {{template "card" .}}
-    {{- else}}
-    <p class="empty">Nothing here yet.</p>
-    {{- end}}
-  </div>
+    <div class="grid" id="grid" style="--cols:{{.BoardColumns}}">
+      {{- range .Items}}
+      {{template "card" .}}
+      {{- else}}
+      <p class="empty">Nothing here yet.</p>
+      {{- end}}
+    </div>
 
-  <div id="board-more" data-offset="{{len .Items}}" data-cat="{{.ActiveCat}}" data-tag="{{.ActiveTag}}" data-page="48"></div>
+    <div id="board-more" data-cursor-created="{{.CursorCreated}}" data-cursor-id="{{.CursorID}}" data-cat="{{.ActiveCat}}" data-tag="{{.ActiveTag}}" data-page="48"{{if .BoardDone}} data-done="1"{{end}}></div>
+  </main>
 
   {{template "colophon" .}}
   {{template "tail" .}}

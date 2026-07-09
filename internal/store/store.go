@@ -9,6 +9,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -60,12 +61,6 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Disable FK enforcement during migrations so safe table rebuilds (DROP +
-	// recreate) don't fire cascade deletes on child tables. Restore afterwards.
-	if _, err := s.db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
-		return err
-	}
-	defer func() { _, _ = s.db.Exec(`PRAGMA foreign_keys=ON`) }()
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
@@ -82,10 +77,31 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(string(b)); err != nil {
+		// SQLite ignores PRAGMA foreign_keys changes while a transaction is open,
+		// so disable on the connection before Begin.
+		if _, err := s.db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+			return err
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
+			_, _ = s.db.Exec(`PRAGMA foreign_keys=ON`)
+			return err
+		}
+		if _, err := tx.Exec(string(b)); err != nil {
+			_ = tx.Rollback()
+			_, _ = s.db.Exec(`PRAGMA foreign_keys=ON`)
 			return fmt.Errorf("migration %s: %w", e.Name(), err)
 		}
-		if _, err := s.db.Exec(`INSERT INTO schema_migrations(name) VALUES(?)`, e.Name()); err != nil {
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(name) VALUES(?)`, e.Name()); err != nil {
+			_ = tx.Rollback()
+			_, _ = s.db.Exec(`PRAGMA foreign_keys=ON`)
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			_, _ = s.db.Exec(`PRAGMA foreign_keys=ON`)
+			return err
+		}
+		if _, err := s.db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
 			return err
 		}
 	}
@@ -161,6 +177,8 @@ func (s *Store) SetSetting(ctx context.Context, key, val string) error {
 }
 
 // ---------- sessions ----------
+// Session rows store the SHA-256 hex of the cookie value (see web.HashSession).
+// Callers must pass the hash, never the raw cookie id.
 
 func (s *Store) CreateSession(ctx context.Context, id string, ttl time.Duration) error {
 	_, err := s.db.ExecContext(ctx,
@@ -214,6 +232,61 @@ func (s *Store) TokenValid(ctx context.Context, hash string) (bool, error) {
 	return n > 0, nil
 }
 
+// APIToken is a non-secret view of a stored API token (never includes the hash).
+type APIToken struct {
+	ID         int64
+	Name       string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// ListTokens returns all API tokens ordered by creation time (newest first).
+func (s *Store) ListTokens(ctx context.Context) ([]APIToken, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, created_at, last_used_at FROM api_tokens
+		ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []APIToken
+	for rows.Next() {
+		var t APIToken
+		var created int64
+		var last sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.Name, &created, &last); err != nil {
+			return nil, err
+		}
+		t.CreatedAt = time.Unix(created, 0).UTC()
+		if last.Valid {
+			lu := time.Unix(last.Int64, 0).UTC()
+			t.LastUsedAt = &lu
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeToken deletes a token by numeric id or exact name. Returns sql.ErrNoRows
+// when nothing matched.
+func (s *Store) RevokeToken(ctx context.Context, idOrName string) error {
+	var res sql.Result
+	var err error
+	if id, perr := strconv.ParseInt(idOrName, 10, 64); perr == nil {
+		res, err = s.db.ExecContext(ctx, `DELETE FROM api_tokens WHERE id=?`, id)
+	} else {
+		res, err = s.db.ExecContext(ctx, `DELETE FROM api_tokens WHERE name=?`, idOrName)
+	}
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // ---------- categories ----------
 
 func (s *Store) ListCategories(ctx context.Context, includePrivate bool) ([]Category, error) {
@@ -244,6 +317,9 @@ func (s *Store) ListCategories(ctx context.Context, includePrivate bool) ([]Cate
 
 func (s *Store) GetOrCreateCategory(ctx context.Context, name string) (int64, error) {
 	slug := Slugify(name)
+	if slug == "" {
+		return 0, errors.New("empty category slug")
+	}
 	// Idempotent + concurrency-safe (parallel ingest may request the same slug).
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO categories(slug,name) VALUES(?,?) ON CONFLICT(slug) DO NOTHING`, slug, name); err != nil {
@@ -339,7 +415,11 @@ type ItemFilter struct {
 	CategorySlug   string
 	TagSlug        string
 	Limit          int
-	Offset         int
+	// Keyset cursor: when both set, return items strictly older than (BeforeCreated, BeforeID).
+	BeforeCreated int64
+	BeforeID      int64
+	// Offset is retained only for sitemap chunking; prefer keyset for board scroll.
+	Offset int
 }
 
 func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
@@ -361,6 +441,10 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 			JOIN tags t ON t.id = it.tag_id WHERE t.slug = ?)`)
 		args = append(args, f.TagSlug)
 	}
+	if f.BeforeCreated > 0 && f.BeforeID > 0 {
+		where = append(where, `(i.created_at < ? OR (i.created_at = ? AND i.id < ?))`)
+		args = append(args, f.BeforeCreated, f.BeforeCreated, f.BeforeID)
+	}
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -368,7 +452,7 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 	if f.Limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, f.Limit)
-		if f.Offset > 0 {
+		if f.Offset > 0 && f.BeforeCreated == 0 {
 			q += " OFFSET ?"
 			args = append(args, f.Offset)
 		}
@@ -385,6 +469,97 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 			return nil, err
 		}
 		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// itemListColumns is the board/search card projection — omits detail-only fields
+// (embed_html, link_description) that inflate HTML for image-heavy boards.
+const itemListColumns = `
+	i.id, i.kind, i.title, i.note, i.source_url, i.visibility,
+	COALESCE(i.category_id,0), COALESCE(c.slug,''), COALESCE(c.name,''),
+	'' AS link_title, '' AS link_description, i.link_site_name, i.embed_provider, '' AS embed_html,
+	i.cover_remote_url, i.cover_key, i.thumb_key, i.small_key, i.placeholder, i.dominant_color, i.width, i.height,
+	i.created_at, i.updated_at, i.published_at,
+	i.file_key, i.file_name, i.file_mime, i.file_size`
+
+// ListItemCards is ListItems with the card projection (no embed HTML / long link text).
+func (s *Store) ListItemCards(ctx context.Context, f ItemFilter) ([]Item, error) {
+	q := `SELECT` + itemListColumns + `
+		FROM items i
+		LEFT JOIN categories c ON c.id = i.category_id`
+	var where []string
+	var args []any
+	if !f.IncludePrivate {
+		where = append(where, "i.visibility='public'")
+	}
+	if f.CategorySlug != "" {
+		where = append(where, "c.slug = ?")
+		args = append(args, f.CategorySlug)
+	}
+	if f.TagSlug != "" {
+		where = append(where, `i.id IN (
+			SELECT it.item_id FROM item_tags it
+			JOIN tags t ON t.id = it.tag_id WHERE t.slug = ?)`)
+		args = append(args, f.TagSlug)
+	}
+	if f.BeforeCreated > 0 && f.BeforeID > 0 {
+		where = append(where, `(i.created_at < ? OR (i.created_at = ? AND i.id < ?))`)
+		args = append(args, f.BeforeCreated, f.BeforeCreated, f.BeforeID)
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += " ORDER BY i.created_at DESC, i.id DESC"
+	if f.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, f.Limit)
+		if f.Offset > 0 && f.BeforeCreated == 0 {
+			q += " OFFSET ?"
+			args = append(args, f.Offset)
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ItemMediaKeys is a minimal projection for broken-item detection.
+type ItemMediaKeys struct {
+	ID       int64
+	CoverKey string
+	FileKey  string
+}
+
+// ListItemMediaKeys returns id/cover/file keys for all items (optionally public-only).
+func (s *Store) ListItemMediaKeys(ctx context.Context, includePrivate bool) ([]ItemMediaKeys, error) {
+	q := `SELECT id, cover_key, file_key FROM items`
+	if !includePrivate {
+		q += ` WHERE visibility='public'`
+	}
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ItemMediaKeys
+	for rows.Next() {
+		var k ItemMediaKeys
+		if err := rows.Scan(&k.ID, &k.CoverKey, &k.FileKey); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
 	}
 	return out, rows.Err()
 }
@@ -408,20 +583,31 @@ func ftsQuery(query string) string {
 	return strings.Join(terms, " ")
 }
 
+// SearchFilter configures SearchItems.
+type SearchFilter struct {
+	Query          string
+	IncludePrivate bool
+	Limit          int
+}
+
 // SearchItems uses the FTS5 index for item text (fast + prefix matching) and a
 // LIKE for category/tag names, falling back to a full LIKE scan if FTS is
 // unavailable or the query has no indexable terms.
-func (s *Store) SearchItems(ctx context.Context, query string, includePrivate bool) ([]Item, error) {
-	match := ftsQuery(query)
-	if match == "" {
-		return s.searchItemsLike(ctx, query, includePrivate)
+func (s *Store) SearchItems(ctx context.Context, f SearchFilter) ([]Item, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 200
 	}
-	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
+	match := ftsQuery(f.Query)
+	if match == "" {
+		return s.searchItemsLike(ctx, f.Query, f.IncludePrivate, limit)
+	}
+	like := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"
 	q := `SELECT` + itemColumns + `
 		FROM items i
 		LEFT JOIN categories c ON c.id = i.category_id
 		WHERE `
-	if !includePrivate {
+	if !f.IncludePrivate {
 		q += "i.visibility='public' AND "
 	}
 	q += `(
@@ -430,10 +616,10 @@ func (s *Store) SearchItems(ctx context.Context, query string, includePrivate bo
 		i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id=it.tag_id WHERE lower(t.name) LIKE ?)
 	)
 	ORDER BY i.created_at DESC, i.id DESC
-	LIMIT 200`
-	rows, err := s.db.QueryContext(ctx, q, match, like, like)
+	LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, q, match, like, like, limit)
 	if err != nil {
-		return s.searchItemsLike(ctx, query, includePrivate) // FTS unavailable/malformed
+		return s.searchItemsLike(ctx, f.Query, f.IncludePrivate, limit) // FTS unavailable/malformed
 	}
 	defer rows.Close()
 	var out []Item
@@ -445,14 +631,17 @@ func (s *Store) SearchItems(ctx context.Context, query string, includePrivate bo
 		out = append(out, it)
 	}
 	if err := rows.Err(); err != nil {
-		return s.searchItemsLike(ctx, query, includePrivate)
+		return s.searchItemsLike(ctx, f.Query, f.IncludePrivate, limit)
 	}
 	return out, nil
 }
 
 // searchItemsLike is the case-insensitive LIKE scan across an item's text fields,
 // category name, and tag names (the fallback for SearchItems).
-func (s *Store) searchItemsLike(ctx context.Context, query string, includePrivate bool) ([]Item, error) {
+func (s *Store) searchItemsLike(ctx context.Context, query string, includePrivate bool, limit int) ([]Item, error) {
+	if limit <= 0 {
+		limit = 200
+	}
 	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
 	q := `SELECT` + itemColumns + `
 		FROM items i
@@ -469,11 +658,12 @@ func (s *Store) searchItemsLike(ctx context.Context, query string, includePrivat
 		i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id=it.tag_id WHERE lower(t.name) LIKE ?)
 	)
 	ORDER BY i.created_at DESC, i.id DESC
-	LIMIT 200`
+	LIMIT ?`
 	args := make([]any, 8)
 	for i := range args {
 		args[i] = like
 	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -575,6 +765,132 @@ func (s *Store) CreateItem(ctx context.Context, it Item) (int64, error) {
 	return res.LastInsertId()
 }
 
+// CreateItemWithMediaAndTags inserts an item, its media rows, and tags in one
+// transaction. Invalid kind/visibility fail before any write.
+func (s *Store) CreateItemWithMediaAndTags(ctx context.Context, it Item, media []Media, tags []string) (int64, error) {
+	switch it.Kind {
+	case "image", "link", "text", "embed", "document":
+	default:
+		return 0, fmt.Errorf("invalid kind %q", it.Kind)
+	}
+	if it.Visibility != "private" {
+		it.Visibility = "public"
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+	created := now
+	if !it.CreatedAt.IsZero() {
+		created = it.CreatedAt.Unix()
+	}
+	var categoryID any
+	if it.CategoryID != 0 {
+		categoryID = it.CategoryID
+	}
+	var published any
+	switch {
+	case it.PublishedAt != nil:
+		published = it.PublishedAt.Unix()
+	case it.Visibility == "public":
+		published = created
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO items
+		(kind,title,note,source_url,visibility,category_id,
+		 link_title,link_description,link_site_name,embed_provider,embed_html,
+		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,
+		 file_key,file_name,file_mime,file_size,
+		 created_at,updated_at,published_at)
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+		it.Kind, it.Title, it.Note, it.SourceURL, it.Visibility, categoryID,
+		it.LinkTitle, it.LinkDescription, it.LinkSiteName, it.EmbedProvider, it.EmbedHTML,
+		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Width, it.Height,
+		it.FileKey, it.FileName, it.FileMime, it.FileSize,
+		created, now, published)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	for _, m := range media {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media
+			(item_id,variant,storage_key,content_type,width,height,bytes,on_local,on_r2)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, m.Variant, m.StorageKey, m.ContentType, m.Width, m.Height, m.Bytes,
+			b2i(m.OnLocal), b2i(m.OnR2)); err != nil {
+			return 0, err
+		}
+	}
+	for _, name := range tags {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		slug := Slugify(name)
+		if slug == "" {
+			return 0, fmt.Errorf("invalid tag %q", name)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO tags(slug,name) VALUES(?,?) ON CONFLICT(slug) DO NOTHING`, slug, name); err != nil {
+			return 0, err
+		}
+		var tagID int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE slug=?`, slug).Scan(&tagID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO item_tags(item_id,tag_id) VALUES(?,?)`, id, tagID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// ReplaceItemMedia clears old media rows, updates item media columns, and inserts
+// the new media rows in one transaction.
+func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, media []Media) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM media WHERE item_id=?`, itemID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE items SET
+			kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, small_key=?, placeholder=?,
+			dominant_color=?, width=?, height=?,
+			file_key=?, file_name=?, file_mime=?, file_size=?,
+			embed_provider=?, embed_html=?,
+			updated_at=unixepoch()
+		WHERE id=?`,
+		next.Kind, next.CoverRemoteURL, next.CoverKey, next.ThumbKey, next.SmallKey, next.Placeholder,
+		next.DominantColor, next.Width, next.Height,
+		next.FileKey, next.FileName, next.FileMime, next.FileSize,
+		next.EmbedProvider, next.EmbedHTML, itemID); err != nil {
+		return err
+	}
+	for _, m := range media {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media
+			(item_id,variant,storage_key,content_type,width,height,bytes,on_local,on_r2)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
+			itemID, m.Variant, m.StorageKey, m.ContentType, m.Width, m.Height, m.Bytes,
+			b2i(m.OnLocal), b2i(m.OnR2)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ResetContent deletes all archive content (items, media, tags, categories)
 // while keeping settings and API tokens. IDs restart from 1.
 func (s *Store) ResetContent(ctx context.Context) error {
@@ -592,6 +908,15 @@ func (s *Store) ResetContent(ctx context.Context) error {
 	} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return err
+		}
+	}
+	// Restart autoincrement IDs from 1 when the sequence table exists (SQLite).
+	for _, name := range []string{"items", "media", "tags", "categories"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name=?`, name); err != nil {
+			// sqlite_sequence may not exist yet on a never-inserted DB; ignore.
+			if !strings.Contains(err.Error(), "no such table") {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -726,6 +1051,25 @@ func (s *Store) AddMedia(ctx context.Context, m Media) (int64, error) {
 	return res.LastInsertId()
 }
 
+// UpsertMedia inserts or updates a media row by (item_id, variant). Used by
+// idempotent maintenance jobs (e.g. backfill-variants).
+func (s *Store) UpsertMedia(ctx context.Context, m Media) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO media (item_id,variant,storage_key,content_type,width,height,bytes,on_local,on_r2)
+		VALUES (?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(item_id, variant) DO UPDATE SET
+			storage_key=excluded.storage_key,
+			content_type=excluded.content_type,
+			width=excluded.width,
+			height=excluded.height,
+			bytes=excluded.bytes,
+			on_local=excluded.on_local,
+			on_r2=excluded.on_r2`,
+		m.ItemID, m.Variant, m.StorageKey, m.ContentType, m.Width, m.Height, m.Bytes,
+		b2i(m.OnLocal), b2i(m.OnR2))
+	return err
+}
+
 // ListUnmirroredMedia returns refined variants present locally but not yet on R2
 // (used by the reconcile/backfill job once R2 is configured).
 func (s *Store) ListUnmirroredMedia(ctx context.Context) ([]Media, error) {
@@ -834,6 +1178,61 @@ func (s *Store) DeleteMediaRow(ctx context.Context, id int64) error {
 	return err
 }
 
+// MediaByKey looks up a media row by storage_key and joins its parent item for
+// visibility checks. Returns sql.ErrNoRows when the key is unknown.
+func (s *Store) MediaByKey(ctx context.Context, key string) (Media, Item, error) {
+	var m Media
+	var it Item
+	var onLocal, onR2 int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT m.id, m.item_id, m.variant, m.storage_key, m.content_type, m.width, m.height, m.bytes,
+		       m.on_local, m.on_r2, i.id, i.visibility
+		FROM media m
+		JOIN items i ON i.id = m.item_id
+		WHERE m.storage_key = ?
+		LIMIT 1`, key).Scan(
+		&m.ID, &m.ItemID, &m.Variant, &m.StorageKey, &m.ContentType, &m.Width, &m.Height, &m.Bytes,
+		&onLocal, &onR2, &it.ID, &it.Visibility)
+	if err != nil {
+		return Media{}, Item{}, err
+	}
+	m.OnLocal, m.OnR2 = onLocal == 1, onR2 == 1
+	return m, it, nil
+}
+
+// ListPrivateMediaOnR2 returns private-item media rows still present on R2
+// (used by localize-private-media).
+func (s *Store) ListPrivateMediaOnR2(ctx context.Context) ([]Media, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id, m.item_id, m.variant, m.storage_key, m.content_type, m.width, m.height, m.bytes, m.on_local, m.on_r2
+		FROM media m
+		JOIN items i ON i.id = m.item_id
+		WHERE i.visibility = 'private' AND m.on_r2 = 1
+		ORDER BY m.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Media
+	for rows.Next() {
+		var m Media
+		var onLocal, onR2 int
+		if err := rows.Scan(&m.ID, &m.ItemID, &m.Variant, &m.StorageKey, &m.ContentType,
+			&m.Width, &m.Height, &m.Bytes, &onLocal, &onR2); err != nil {
+			return nil, err
+		}
+		m.OnLocal, m.OnR2 = onLocal == 1, onR2 == 1
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MarkMediaLocalOnly sets on_local=1, on_r2=0 after a successful private localize.
+func (s *Store) MarkMediaLocalOnly(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE media SET on_local=1, on_r2=0 WHERE id=?`, id)
+	return err
+}
+
 // GetAdjacent returns the ids of the newer (prev) and older (next) items
 // relative to it within the board ordering (created_at DESC, id DESC). Returns 0
 // for either end. Respects visibility unless includePrivate.
@@ -860,6 +1259,19 @@ func (s *Store) GetAdjacent(ctx context.Context, it Item, includePrivate bool) (
 		return prevID, 0, err
 	}
 	return prevID, nextID, nil
+}
+
+// PublicRevision returns COUNT(*) and MAX(updated_at) for public items, used as
+// a cheap ETag/conditional-GET fingerprint for feeds and sitemaps.
+func (s *Store) PublicRevision(ctx context.Context) (count int, maxUpdated int64, err error) {
+	var max sql.NullInt64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), MAX(updated_at) FROM items WHERE visibility='public'`).
+		Scan(&count, &max)
+	if max.Valid {
+		maxUpdated = max.Int64
+	}
+	return count, maxUpdated, err
 }
 
 // GetRelated returns items that share a category or any tag with it (excluding
@@ -916,17 +1328,24 @@ func (s *Store) PublicStats(ctx context.Context) (Stats, error) {
 	return st, err
 }
 
-// Slugify lowercases and hyphenates a string for use in URLs.
+// Slugify lowercases ASCII and hyphenates a string for use in URLs, retaining
+// Unicode letters and numbers so CJK/etc. categories get non-empty slugs.
 func Slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
 	var b strings.Builder
 	prevDash := false
 	for _, r := range s {
 		switch {
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+			prevDash = false
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 			prevDash = false
-		case r == ' ' || r == '-' || r == '_' || r == '/' || r == '.':
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			b.WriteRune(r)
+			prevDash = false
+		case r == ' ' || r == '-' || r == '_' || r == '/' || r == '.' || unicode.IsSpace(r) || unicode.IsPunct(r):
 			if !prevDash && b.Len() > 0 {
 				b.WriteByte('-')
 				prevDash = true
@@ -934,4 +1353,108 @@ func Slugify(s string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// ---------- pending shares (PWA share-across-login) ----------
+
+// PendingShare is a short-lived PWA share payload held until the admin logs in.
+type PendingShare struct {
+	ID        string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	Title     string
+	Text      string
+	URL       string
+	FileKey   string
+	FileName  string
+	FileMime  string
+	FileSize  int64
+}
+
+func (s *Store) CreatePendingShare(ctx context.Context, p PendingShare) error {
+	if p.ID == "" {
+		return errors.New("pending share id required")
+	}
+	exp := p.ExpiresAt.Unix()
+	if exp == 0 {
+		exp = time.Now().Add(30 * time.Minute).Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO pending_shares
+		(id, created_at, expires_at, title, text, url, file_key, file_name, file_mime, file_size)
+		VALUES (?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, exp, p.Title, p.Text, p.URL, p.FileKey, p.FileName, p.FileMime, p.FileSize)
+	return err
+}
+
+// TakePendingShare atomically deletes and returns a non-expired pending share.
+func (s *Store) TakePendingShare(ctx context.Context, id string) (*PendingShare, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var p PendingShare
+	var created, expires int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, created_at, expires_at, title, text, url, file_key, file_name, file_mime, file_size
+		FROM pending_shares WHERE id=? AND expires_at > unixepoch()`, id).Scan(
+		&p.ID, &created, &expires, &p.Title, &p.Text, &p.URL, &p.FileKey, &p.FileName, &p.FileMime, &p.FileSize)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM pending_shares WHERE id=? AND expires_at > unixepoch()`, id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, nil // lost race
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	p.CreatedAt = time.Unix(created, 0).UTC()
+	p.ExpiresAt = time.Unix(expires, 0).UTC()
+	return &p, nil
+}
+
+func (s *Store) DeletePendingShare(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM pending_shares WHERE id=?`, id)
+	return err
+}
+
+// ListExpiredPendingShares returns expired pending rows (for blob cleanup).
+func (s *Store) ListExpiredPendingShares(ctx context.Context) ([]PendingShare, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, created_at, expires_at, title, text, url, file_key, file_name, file_mime, file_size
+		FROM pending_shares WHERE expires_at <= unixepoch()`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingShare
+	for rows.Next() {
+		var p PendingShare
+		var created, expires int64
+		if err := rows.Scan(&p.ID, &created, &expires, &p.Title, &p.Text, &p.URL, &p.FileKey, &p.FileName, &p.FileMime, &p.FileSize); err != nil {
+			return nil, err
+		}
+		p.CreatedAt = time.Unix(created, 0).UTC()
+		p.ExpiresAt = time.Unix(expires, 0).UTC()
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// PurgeExpiredPendingShares drops expired pending share rows.
+func (s *Store) PurgeExpiredPendingShares(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM pending_shares WHERE expires_at <= unixepoch()`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

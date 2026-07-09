@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -32,18 +34,23 @@ var templatesFS embed.FS
 var staticFS embed.FS
 
 type Server struct {
-	cfg     config.Config
-	store   *store.Store
-	media   media.Store
-	ingest  *ingest.Service
-	backup  BackupController
-	tmpl    *template.Template
-	weather weatherCache
-	loginRL *loginLimiter
-	ogCache *ogCache
-	siteOG  siteOGCache                  // cached default (site-wide) OG share card
-	site    atomic.Pointer[siteIdentity] // admin-editable branding, lock-free reads
-	csrfKey []byte
+	cfg              config.Config
+	store            *store.Store
+	media            media.Store
+	ingest           *ingest.Service
+	backup           BackupController
+	tmpl             *template.Template
+	weather          weatherCache
+	loginRL          *loginLimiter
+	translateRL      *tokenBucket
+	apiCreateIPRL    *tokenBucket
+	apiCreateTokenRL *tokenBucket
+	translateCache   *translateCache
+	ogCache          *ogCache
+	siteOG           siteOGCache                  // cached default (site-wide) OG share card
+	site             atomic.Pointer[siteIdentity] // admin-editable branding, lock-free reads
+	siteCache        *siteCache
+	csrfKey          []byte
 }
 
 // parseTemplates builds the template set with the shared FuncMap. Extracted from
@@ -90,7 +97,17 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 
 	csrfKey := make([]byte, 32)
 	_, _ = rand.Read(csrfKey)
-	s := &Server{cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl, loginRL: newLoginLimiter(), ogCache: newOGCache(256), csrfKey: csrfKey}
+	s := &Server{
+		cfg: cfg, store: st, media: ms, ingest: ing, backup: bc, tmpl: tmpl,
+		loginRL:          newLoginLimiter(),
+		translateRL:      newTokenBucket(20.0/(10*60), 5), // 20 / 10 min, burst 5
+		apiCreateIPRL:    newTokenBucket(20.0/60, 5),      // 20 / min per IP
+		apiCreateTokenRL: newTokenBucket(60.0/3600, 5),    // 60 / hour per token
+		translateCache:   newTranslateCache(),
+		ogCache:          newOGCache(256),
+		siteCache:        newSiteCache(),
+		csrfKey:          csrfKey,
+	}
 	s.loadSite(context.Background()) // publish admin-editable branding (title/url/etc.)
 	s.startWeather()
 	return s, nil
@@ -102,7 +119,7 @@ func (s *Server) Handler() http.Handler {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", cacheControl("public, max-age=604800",
 		http.StripPrefix("/static/", http.FileServer(http.FS(staticSub)))))
-	mux.Handle("GET /media/", http.StripPrefix("/media/", http.FileServer(http.Dir(s.cfg.MediaDir))))
+	mux.HandleFunc("GET /media/{key...}", s.handleMedia)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
@@ -166,16 +183,81 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/items/{id}/delete", s.requireAdmin(s.csrf(s.handleAdminDelete)))
 	mux.HandleFunc("GET /admin/settings", s.requireAdmin(s.handleAdminSettings))
 	mux.HandleFunc("POST /admin/settings", s.requireAdmin(s.csrf(s.handleAdminSettingsSave)))
+	mux.HandleFunc("POST /admin/tokens/revoke", s.requireAdmin(s.csrf(s.handleAdminTokenRevoke)))
 	mux.HandleFunc("GET /admin/maintenance", s.requireAdmin(s.handleMaintenance))
 	mux.HandleFunc("POST /admin/maintenance/cleanup", s.requireAdmin(s.csrf(s.handleMaintenanceCleanup)))
 	mux.HandleFunc("POST /admin/backup", s.requireAdmin(s.csrf(s.handleAdminBackup)))
 
-	// PWA share target — the OS share sheet posts here without a CSRF token, so it's
-	// not csrf-wrapped; it's same-origin (manifest-registered) + session-gated.
-	mux.HandleFunc("POST /share", s.requireAdmin(s.handleShare))
+	// PWA share target — same-origin + session when available; unauthenticated
+	// shares are stashed in pending_shares and recovered after login.
+	mux.HandleFunc("POST /share", s.handleShare)
+	mux.HandleFunc("GET /share/pending/{id}", s.requireAdmin(s.handleSharePending))
 
 	return logRequests(s.securityHeaders(s.recoverPanic(mux)))
 }
+
+// handleMedia serves media bytes through an auth-aware gateway. Public item media
+// is cacheable; private media requires an admin session and is never disclosed
+// (404, not 403) to anonymous clients.
+func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		key = strings.TrimPrefix(r.URL.Path, "/media/")
+	}
+	key = path.Clean("/" + strings.TrimPrefix(key, "/"))
+	key = strings.TrimPrefix(key, "/")
+	if key == "" || key == "." || strings.Contains(key, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	m, it, err := s.store.MediaByKey(r.Context(), key)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if it.Visibility != "public" && !s.isAdmin(r) {
+		http.NotFound(w, r)
+		return
+	}
+
+	rc, err := s.media.Open(m.StorageKey)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer rc.Close()
+
+	// Peek a few bytes for content-type detection when the row has none.
+	ct := m.ContentType
+	var prefix []byte
+	if ct == "" {
+		prefix = make([]byte, 512)
+		n, rerr := io.ReadFull(rc, prefix)
+		if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
+			http.NotFound(w, r)
+			return
+		}
+		prefix = prefix[:n]
+		ct = http.DetectContentType(prefix)
+	}
+
+	if it.Visibility == "public" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "private, no-store")
+	}
+	w.Header().Set("Content-Type", ct)
+	if m.Bytes > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", m.Bytes))
+	}
+	w.WriteHeader(http.StatusOK)
+	if len(prefix) > 0 {
+		_, _ = w.Write(prefix)
+	}
+	_, _ = io.Copy(w, rc)
+}
+
 
 // serveEmbedded serves a single embedded static file at a root path with a
 // specific content type (used for the PWA manifest + service worker).

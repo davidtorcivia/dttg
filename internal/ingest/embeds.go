@@ -93,7 +93,7 @@ func (s *Service) fetchEmbed(ctx context.Context, rawurl, provider string) (*emb
 	}
 	clean := sanitizeEmbedHTML(data.HTML)
 	if clean == "" {
-		clean = data.HTML // trusted provider, unexpected markup — keep it (CSP frame-src still constrains)
+		return nil, fmt.Errorf("embed html not allowlisted")
 	}
 	return &embedInfo{Provider: provider, HTML: clean, ThumbnailURL: data.ThumbnailURL, Title: data.Title}, nil
 }

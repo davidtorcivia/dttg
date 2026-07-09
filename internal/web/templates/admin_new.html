@@ -6,6 +6,7 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="admin admin-form">
     <h1>New item</h1>
     <form method="POST" action="/admin/items" enctype="multipart/form-data">
@@ -39,10 +40,11 @@
           <option value="private"{{if and .Prefill (eq .Prefill.Visibility "private")}} selected{{end}}>Private</option>
         </select>
       </label>
-      {{if .Error}}<div class="login-error">{{.Error}}</div>{{end}}
+      {{template "flash" .}}
       <div class="form-actions"><button type="submit">Archive it</button> <a href="/admin">Cancel</a></div>
     </form>
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

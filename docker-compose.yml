@@ -11,6 +11,12 @@ services:
       - "8080:8080"
     volumes:
       - dnttg-data:/data
+    healthcheck:
+      test: ["CMD", "/app/dnttg", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Optional: run the Cloudflare tunnel as a sidecar instead of on the host.
   # Uncomment and set TUNNEL_TOKEN in .env (from the Cloudflare dashboard).

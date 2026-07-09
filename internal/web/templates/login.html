@@ -6,15 +6,18 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="login-wrap">
     <h1>Restricted</h1>
     <form method="POST" action="/login">
+      {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
       <label for="login-password" class="visually-hidden">Password</label>
       <input type="password" id="login-password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
       <button type="submit">Enter</button>
       {{if .Error}}<div class="login-error">{{.Error}}</div>{{end}}
     </form>
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

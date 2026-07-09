@@ -45,24 +45,48 @@ func (m *MirrorStore) Mirrors(key string) bool { return m.r2 != nil && mirrorabl
 
 func (m *MirrorStore) HasR2() bool { return m.r2 != nil }
 
-func (m *MirrorStore) Put(ctx context.Context, key, contentType string, r io.Reader) error {
+func (m *MirrorStore) Put(ctx context.Context, key, contentType string, size int64, r io.Reader) error {
 	// Regenerable image variants live on R2 only — no local copy.
 	if m.r2 != nil && imageVariant(key) {
-		return m.r2.Put(ctx, key, contentType, r)
+		return m.r2.Put(ctx, key, contentType, size, r)
+	}
+	// Prefer zero-copy when the caller already has a sized bytes.Reader.
+	if br, ok := r.(*bytes.Reader); ok {
+		if size < 0 {
+			size = int64(br.Len())
+		}
+		if err := m.local.Put(ctx, key, contentType, size, br); err != nil {
+			return err
+		}
+		if m.Mirrors(key) {
+			if _, err := br.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			return m.r2.Put(ctx, key, contentType, size, br)
+		}
+		return nil
 	}
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	if err := m.local.Put(ctx, key, contentType, bytes.NewReader(data)); err != nil {
+	if size < 0 {
+		size = int64(len(data))
+	}
+	if err := m.local.Put(ctx, key, contentType, size, bytes.NewReader(data)); err != nil {
 		return err
 	}
 	if m.Mirrors(key) {
-		if err := m.r2.Put(ctx, key, contentType, bytes.NewReader(data)); err != nil {
+		if err := m.r2.Put(ctx, key, contentType, size, bytes.NewReader(data)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// PutPrivate writes only to the local archive. Private media must not land on R2/CDN.
+func (m *MirrorStore) PutPrivate(ctx context.Context, key, contentType string, r io.Reader, size int64) error {
+	return m.local.Put(ctx, key, contentType, size, r)
 }
 
 func (m *MirrorStore) Open(key string) (io.ReadCloser, error) {
@@ -133,9 +157,18 @@ func (m *MirrorStore) List(ctx context.Context) ([]ObjectInfo, error) {
 // variants up to R2 once it is configured).
 func (m *MirrorStore) OpenLocal(key string) (io.ReadCloser, error) { return m.local.Open(key) }
 
-func (m *MirrorStore) PutR2(ctx context.Context, key, contentType string, r io.Reader) error {
+func (m *MirrorStore) PutR2(ctx context.Context, key, contentType string, size int64, r io.Reader) error {
 	if m.r2 == nil {
 		return nil
 	}
-	return m.r2.Put(ctx, key, contentType, r)
+	return m.r2.Put(ctx, key, contentType, size, r)
+}
+
+// DeleteR2 removes a key from R2 only, leaving the local archive untouched.
+// Used by localize-private-media after a private blob has been copied local.
+func (m *MirrorStore) DeleteR2(ctx context.Context, key string) error {
+	if m.r2 == nil {
+		return nil
+	}
+	return m.r2.Delete(ctx, key)
 }

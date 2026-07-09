@@ -6,6 +6,7 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="admin admin-form">
     <h1>Edit item {{pad3 .Item.ID}}</h1>
     <div class="edit-layout">
@@ -55,6 +56,7 @@
       <button type="submit">Delete item</button>
     </form>
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

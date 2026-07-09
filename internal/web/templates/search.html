@@ -8,24 +8,28 @@
 </head>
 <body>
   {{template "sysheader" .}}
-  <span id="maincontent" tabindex="-1"></span>
+  <main id="maincontent" tabindex="-1">
+    <h1 class="visually-hidden">Search</h1>
 
-  <div class="search-page">
-    <form class="search-page-form" action="/search" method="GET" role="search">
-      <input type="search" name="q" placeholder="Search the archive" autocomplete="off" autofocus value="{{.SearchQuery}}">
-    </form>
-    {{if .SearchQuery}}
-    <p class="search-meta">{{len .Items}} result{{if ne (len .Items) 1}}s{{end}} for &ldquo;{{.SearchQuery}}&rdquo;</p>
-    {{end}}
-  </div>
+    <div class="search-page">
+      <form class="search-page-form" action="/search" method="GET" role="search">
+        <input type="search" name="q" placeholder="Search the archive" autocomplete="off" autofocus value="{{.SearchQuery}}">
+      </form>
+      {{if .SearchQuery}}
+      <p class="search-meta" role="status" aria-live="polite">{{len .Items}} result{{if ne (len .Items) 1}}s{{end}} for &ldquo;{{.SearchQuery}}&rdquo;</p>
+      {{else}}
+      <p class="search-meta" role="status" aria-live="polite"></p>
+      {{end}}
+    </div>
 
-  <div class="grid" id="grid">
-    {{- range .Items}}
-    {{template "card" .}}
-    {{- else}}
-    {{- if .SearchQuery}}<p class="empty">No results.</p>{{end}}
-    {{- end}}
-  </div>
+    <div class="grid" id="grid">
+      {{- range .Items}}
+      {{template "card" .}}
+      {{- else}}
+      {{- if .SearchQuery}}<p class="empty">No results.</p>{{end}}
+      {{- end}}
+    </div>
+  </main>
 
   {{template "tail" .}}
 </body>

@@ -42,10 +42,14 @@ func newTestServer(t *testing.T) *Server {
 			SiteTagline: "INDEX",
 			MediaDir:    filepath.Join(dir, "media"),
 		},
-		store:   st,
-		media:   ms,
-		tmpl:    tmpl,
-		loginRL: newLoginLimiter(),
+		store:            st,
+		media:            ms,
+		tmpl:             tmpl,
+		loginRL:          newLoginLimiter(),
+		translateRL:      newTokenBucket(20.0/(10*60), 5),
+		apiCreateIPRL:    newTokenBucket(20.0/60, 5),
+		apiCreateTokenRL: newTokenBucket(60.0/3600, 5),
+		translateCache:   newTranslateCache(),
 	}
 }
 
@@ -316,11 +320,11 @@ func TestScanOrphans(t *testing.T) {
 	ctx := context.Background()
 
 	// orphan file: present in storage, referenced by no media row
-	_ = s.media.Put(ctx, "items/orphan1/full.jpg", "image/jpeg", strings.NewReader("xx"))
+	_ = s.media.Put(ctx, "items/orphan1/full.jpg", "image/jpeg", 2, strings.NewReader("xx"))
 
 	// healthy item: cover blob present + a media row referencing it
 	okID, _ := s.store.CreateItem(ctx, store.Item{Kind: "image", Title: "ok", Visibility: "public", CoverKey: "items/ok/full.jpg"})
-	_ = s.media.Put(ctx, "items/ok/full.jpg", "image/jpeg", strings.NewReader("yy"))
+	_ = s.media.Put(ctx, "items/ok/full.jpg", "image/jpeg", 2, strings.NewReader("yy"))
 	_, _ = s.store.AddMedia(ctx, store.Media{ItemID: okID, Variant: "full", StorageKey: "items/ok/full.jpg", OnLocal: true})
 
 	// broken item: cover key set, but no blob in storage
@@ -365,10 +369,10 @@ func TestMaintenancePage(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
 	sid := "admin-sess"
-	if err := s.store.CreateSession(ctx, sid, time.Hour); err != nil {
+	if err := s.store.CreateSession(ctx, HashSession(sid), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	_ = s.media.Put(ctx, "items/orphanX/full.jpg", "image/jpeg", strings.NewReader("z"))
+	_ = s.media.Put(ctx, "items/orphanX/full.jpg", "image/jpeg", 1, strings.NewReader("z"))
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/maintenance", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})
@@ -420,7 +424,7 @@ func TestLoginLimiter(t *testing.T) {
 func TestCSRF(t *testing.T) {
 	s := newTestServer(t)
 	sid := "test-session"
-	if err := s.store.CreateSession(context.Background(), sid, time.Hour); err != nil {
+	if err := s.store.CreateSession(context.Background(), HashSession(sid), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	h := s.Handler()
@@ -456,8 +460,13 @@ func TestClientIP(t *testing.T) {
 		t.Errorf("clientIP (no trust) = %q, want 203.0.113.9", ip)
 	}
 	s.cfg.TrustProxy = true
-	if ip := s.clientIP(req); ip != "10.0.0.1" {
-		t.Errorf("clientIP (trust) = %q, want 10.0.0.1", ip)
+	// Prefer right-most XFF when X-Real-IP is absent (proxy-stripped chain).
+	if ip := s.clientIP(req); ip != "70.0.0.1" {
+		t.Errorf("clientIP (trust XFF) = %q, want 70.0.0.1", ip)
+	}
+	req.Header.Set("X-Real-IP", "198.51.100.7")
+	if ip := s.clientIP(req); ip != "198.51.100.7" {
+		t.Errorf("clientIP (trust X-Real-IP) = %q, want 198.51.100.7", ip)
 	}
 }
 

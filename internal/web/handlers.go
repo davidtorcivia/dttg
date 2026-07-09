@@ -42,11 +42,12 @@ type pageData struct {
 	ActiveCat      string
 	ActiveTag      string
 	Error          string
+	Next           string             // login form: safe return path after auth
 	Items          []itemView
 	Item           *itemView
 	TagsCSV        string             // edit form: current tags as comma-separated text
 	SearchQuery    string             // search page: current query
-	TrackingScript template.HTML      // analytics snippet injected on public pages
+	TrackingScript template.HTML      // sanitized analytics snippet on public pages
 	Settings       *settingsView      // admin settings page
 	Prefill        *newItemForm       // admin "new" form prefill (bookmarklet/query)
 	Meta           metaTags           // SEO / OG tags
@@ -61,16 +62,17 @@ type pageData struct {
 	Nonce          string             // per-request CSP nonce for inline <script> tags
 	CSRFToken      string             // session-bound token for admin POST forms
 	Maintenance    *maintenanceReport // admin maintenance/orphan scan
+	// Keyset cursor for infinite scroll (last item on the board page).
+	CursorCreated int64
+	CursorID      int64
+	BoardDone     bool // fewer than boardPage items => no more pages
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
 
 func (s *Server) page(r *http.Request, title string) pageData {
 	isAdmin := s.isAdmin(r)
-	cats, err := s.store.ListCategories(r.Context(), isAdmin)
-	if err != nil {
-		log.Printf("list categories: %v", err)
-	}
+	cats := s.cachedCategories(r.Context(), isAdmin)
 	// The client mirrors an explicit light/dark choice into this cookie so the server
 	// can declare color-scheme in the served HTML head from byte 0. That makes the
 	// browser's very first paint (including the canvas it shows between page
@@ -104,11 +106,8 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		},
 	}
 	// Inject the analytics snippet on public views only (don't track admin/self).
-	// The nonce is added so it's allowed under the strict CSP script-src.
 	if !isAdmin {
-		if ts, _ := s.store.GetSetting(r.Context(), "tracking_script"); ts != "" {
-			pd.TrackingScript = template.HTML(injectNonce(ts, nonce)) //nolint:gosec // admin-provided, trusted
-		}
+		pd.TrackingScript = s.cachedTrackingHTML(r.Context(), nonce)
 	} else if c, err := r.Cookie(sessionCookie); err == nil {
 		pd.CSRFToken = s.csrfToken(c.Value) // for admin POST forms
 	}
@@ -123,12 +122,25 @@ func (s *Server) absURL(u string) string {
 	return s.siteBaseURL() + u
 }
 
+// mediaURL resolves a storage key for rendering. Private item media always goes
+// through the app gateway so R2/CDN URLs never leak private bytes. Public media
+// may use the media store URL (R2/CDN when configured).
+func (s *Server) mediaURL(key, visibility string) string {
+	if key == "" {
+		return ""
+	}
+	if visibility == "private" {
+		return "/media/" + strings.TrimLeft(key, "/")
+	}
+	return s.media.URL(key)
+}
+
 // coverURL resolves the full image for an item. The media store decides whether
 // that resolves to the R2 custom domain or the local /media path; remote-hosted
 // covers (not yet processed) fall back to their original URL.
 func (s *Server) coverURL(it store.Item) string {
 	if it.CoverKey != "" {
-		return s.media.URL(it.CoverKey)
+		return s.mediaURL(it.CoverKey, it.Visibility)
 	}
 	return it.CoverRemoteURL
 }
@@ -137,9 +149,9 @@ func (s *Server) coverURL(it store.Item) string {
 func (s *Server) thumbURL(it store.Item) string {
 	switch {
 	case it.ThumbKey != "":
-		return s.media.URL(it.ThumbKey)
+		return s.mediaURL(it.ThumbKey, it.Visibility)
 	case it.CoverKey != "":
-		return s.media.URL(it.CoverKey)
+		return s.mediaURL(it.CoverKey, it.Visibility)
 	default:
 		return it.CoverRemoteURL
 	}
@@ -168,10 +180,10 @@ func (s *Server) view(it store.Item) itemView {
 		DetailURL: "/item/" + strconv.FormatInt(it.ID, 10),
 	}
 	if it.FileKey != "" {
-		v.FileURL = s.media.URL(it.FileKey)
+		v.FileURL = s.mediaURL(it.FileKey, it.Visibility)
 	}
 	if it.SmallKey != "" {
-		v.SmallURL = s.media.URL(it.SmallKey)
+		v.SmallURL = s.mediaURL(it.SmallKey, it.Visibility)
 	}
 	return v
 }
@@ -181,7 +193,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	pd := s.page(r, "SEARCH")
 	pd.SearchQuery = q
 	if q != "" {
-		items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r))
+		items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 200})
 		if err != nil {
 			s.serverError(w, r, err)
 			return
@@ -199,11 +211,8 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	results := []map[string]any{}
 	if q != "" {
-		if items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r)); err == nil {
-			for i, it := range items {
-				if i >= 12 {
-					break
-				}
+		if items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 12}); err == nil {
+			for _, it := range items {
 				v := s.view(it)
 				results = append(results, map[string]any{
 					"title":    it.Title,
@@ -228,7 +237,7 @@ func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
 	if q == "" {
 		return
 	}
-	items, err := s.store.SearchItems(r.Context(), q, s.isAdmin(r))
+	items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 48})
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -259,7 +268,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		f.TagSlug = slug
 	}
 
-	items, err := s.store.ListItems(r.Context(), f)
+	items, err := s.store.ListItemCards(r.Context(), f)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -268,7 +277,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	pd := s.page(r, s.siteTitle())
 	pd.ActiveCat = f.CategorySlug
 	pd.ActiveTag = f.TagSlug
-	pd.BoardColumns = s.boardColumns(r.Context())
+	pd.BoardColumns = s.cachedBoardColumns(r.Context())
 	for i, it := range items {
 		v := s.view(it)
 		// The masonry distributes cards round-robin, so the first row is the first
@@ -278,6 +287,12 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		pd.Items = append(pd.Items, v)
 	}
+	if n := len(items); n > 0 {
+		last := items[n-1]
+		pd.CursorCreated = last.CreatedAt.Unix()
+		pd.CursorID = last.ID
+	}
+	pd.BoardDone = len(items) < boardPage
 	if st, err := s.store.PublicStats(r.Context()); err == nil {
 		pd.Stats = &st
 	}
@@ -285,17 +300,21 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBoardMore returns the next page of board cards as an HTML fragment
-// (used by infinite scroll).
+// (used by infinite scroll). Cursor is "created:id" (unix seconds + item id).
 func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	f := store.ItemFilter{
 		IncludePrivate: s.isAdmin(r),
 		Limit:          boardPage,
-		Offset:         offset,
 		CategorySlug:   r.URL.Query().Get("cat"),
 		TagSlug:        r.URL.Query().Get("tag"),
 	}
-	items, err := s.store.ListItems(r.Context(), f)
+	if cur := r.URL.Query().Get("cursor"); cur != "" {
+		if parts := strings.SplitN(cur, ":", 2); len(parts) == 2 {
+			f.BeforeCreated, _ = strconv.ParseInt(parts[0], 10, 64)
+			f.BeforeID, _ = strconv.ParseInt(parts[1], 10, 64)
+		}
+	}
+	items, err := s.store.ListItemCards(r.Context(), f)
 	if err != nil {
 		s.serverError(w, r, err)
 		return

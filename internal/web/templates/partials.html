@@ -6,7 +6,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#111111">
+  <meta name="theme-color" content="{{if eq .ThemeAttr "light"}}#f5f3ec{{else}}#111111{{end}}" id="theme-color">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <link rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
   <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
@@ -43,13 +43,15 @@
     <form class="search-form" action="/search" method="GET" role="search">
       <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="search" name="q" id="search-input" placeholder="Search the archive" autocomplete="off" value="{{.SearchQuery}}">
-      <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
+      <button type="button" class="search-close" id="search-close" aria-label="Close search">&times;</button>
     </form>
     <div class="search-results" id="search-results"></div>
+    <div class="search-status" id="search-status" role="status" aria-live="polite" aria-atomic="true"></div>
   </div>
 </div>
 <div class="shortcuts" id="shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
   <div class="shortcuts-panel">
+    <button type="button" class="modal-close" id="shortcuts-close" aria-label="Close shortcuts">&times;</button>
     <h2>Keys</h2>
     <dl>
       <div><dt>&larr; &rarr;</dt><dd>previous / next item</dd></div>
@@ -76,12 +78,32 @@
 
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{end}}
 
+{{define "category_nav"}}
+{{- if or .Categories .ActiveTag}}
+<nav class="cats" aria-label="Categories">
+  <a href="/"{{if and (eq .ActiveCat "") (eq .ActiveTag "")}} class="active" aria-current="page"{{end}}>All</a>
+  {{- range .Categories}}
+  <a href="/category/{{.Slug}}"{{if eq $.ActiveCat .Slug}} class="active" aria-current="page"{{end}}>{{.Name}}{{if .Count}} <span>{{.Count}}</span>{{end}}</a>
+  {{- end}}
+  {{- if .ActiveTag}}
+  <a href="/" class="active cats-tag" aria-current="page" title="Clear tag filter">#{{.ActiveTag}} <span aria-hidden="true">&times;</span></a>
+  {{- end}}
+</nav>
+{{- end}}
+{{end}}
+
+{{define "flash"}}
+{{- if .Error}}
+<div class="flash flash-error" role="status">{{.Error}}</div>
+{{- end}}
+{{end}}
+
 {{define "tail"}}
 <script nonce="{{.Nonce}}" src="{{asset "/static/js/app.js"}}"></script>
 {{end}}
 
 {{define "card"}}
-<a href="{{.DetailURL}}" class="card">
+<a href="{{.DetailURL}}" class="card" data-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}">
   <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
     {{- if .ThumbURL}}
     <img src="{{.ThumbURL}}"{{if and .CoverURL (ne .CoverURL .ThumbURL)}} srcset="{{if .SmallURL}}{{.SmallURL}} {{clampW 400 .Width}}w, {{end}}{{.ThumbURL}} {{clampW 800 .Width}}w, {{.CoverURL}} {{clampW 1600 .Width}}w" sizes="(max-width:600px) 92vw, (max-width:1000px) 46vw, 30vw"{{end}} alt="{{.AltText}}"{{if .Eager}} fetchpriority="high"{{else}} loading="lazy"{{end}}{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}} data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>

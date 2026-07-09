@@ -6,9 +6,10 @@
 </head>
 <body>
   {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
   <div class="admin">
     <div class="admin-head">
-      <h1>Archive — {{len .Items}} items</h1>
+      <h1>Archive</h1>
       <a class="btn" href="/admin/new">+ New</a>
     </div>
     <table class="admin-table">
@@ -35,7 +36,11 @@
         {{- end}}
       </tbody>
     </table>
+    {{- if and (not .BoardDone) .CursorID}}
+    <p class="admin-more"><a class="btn" href="/admin?cursor={{.CursorCreated}}:{{.CursorID}}">Load more</a></p>
+    {{- end}}
   </div>
+  </main>
   {{template "tail" .}}
 </body>
 </html>

@@ -2,20 +2,86 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const translateMaxRunes = 5000
+const (
+	translateMaxRunes = 5000
+	translateCacheTTL = time.Hour
+)
+
+type translateCacheEntry struct {
+	text   string
+	source string
+	exp    time.Time
+}
+
+// translateCache is a tiny in-memory translation result cache keyed by
+// sha256(target + "\x00" + text). Entries expire after translateCacheTTL.
+type translateCache struct {
+	mu   sync.Mutex
+	data map[string]translateCacheEntry
+}
+
+func newTranslateCache() *translateCache {
+	return &translateCache{data: map[string]translateCacheEntry{}}
+}
+
+func translateCacheKey(target, text string) string {
+	sum := sha256.Sum256([]byte(target + "\x00" + text))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *translateCache) get(key string) (text, source string, ok bool) {
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prune(now)
+	e, ok := c.data[key]
+	if !ok || now.After(e.exp) {
+		return "", "", false
+	}
+	return e.text, e.source, true
+}
+
+func (c *translateCache) set(key, text, source string) {
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prune(now)
+	c.data[key] = translateCacheEntry{text: text, source: source, exp: now.Add(translateCacheTTL)}
+}
+
+func (c *translateCache) prune(now time.Time) {
+	for k, e := range c.data {
+		if now.After(e.exp) {
+			delete(c.data, k)
+		}
+	}
+}
 
 // handleTranslate translates a block of text (auto-detecting the source language)
-// to the requested target (default "en"). Public, length-capped.
+// to the requested target (default "en"). Public, length-capped, rate-limited.
 func (s *Server) handleTranslate(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if s.translateRL != nil {
+		if ok, retry := s.translateRL.allow(ip); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+			writeJSONError(w, http.StatusTooManyRequests, "rate limited")
+			return
+		}
+	}
+
 	var body struct {
 		Text   string `json:"text"`
 		Target string `json:"target"`
@@ -32,10 +98,27 @@ func (s *Server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	if rs := []rune(text); len(rs) > translateMaxRunes {
 		text = string(rs[:translateMaxRunes])
 	}
-	translated, source, err := translateText(r.Context(), text, body.Target)
+	target := strings.TrimSpace(body.Target)
+	if target == "" {
+		target = "en"
+	}
+
+	cacheKey := translateCacheKey(target, text)
+	if s.translateCache != nil {
+		if translated, source, ok := s.translateCache.get(cacheKey); ok {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"text": translated, "source": source})
+			return
+		}
+	}
+
+	translated, source, err := translateText(r.Context(), text, target)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "translation unavailable")
 		return
+	}
+	if s.translateCache != nil {
+		s.translateCache.set(cacheKey, translated, source)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"text": translated, "source": source})

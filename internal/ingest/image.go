@@ -21,16 +21,27 @@ type ProcessedImage struct {
 }
 
 const (
-	fullMax  = 1600
-	thumbMax = 800
-	smallMax = 400
-	phMax    = 24
+	fullMax   = 1600
+	thumbMax  = 800
+	smallMax  = 400
+	phMax     = 24
+	maxPixels = 40_000_000 // ~40MP — reject camera dumps that would OOM
 )
 
 // ProcessImage decodes raw image bytes and produces refined variants: full
 // (<=1600px), thumb (<=800px) and small (<=400px) JPEGs, a tiny base64 blur-up
 // placeholder, and the average ("dominant") color for an elegant loading state.
+// Variants are chained (full → thumb → small) to avoid re-resizing the original.
 func ProcessImage(raw []byte) (*ProcessedImage, error) {
+	// Bound decode work: Config only reads headers for most formats.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decode image config: %w", err)
+	}
+	if cfg.Width > 0 && cfg.Height > 0 && int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return nil, fmt.Errorf("image too large (%dx%d > %d pixels)", cfg.Width, cfg.Height, maxPixels)
+	}
+
 	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
@@ -38,16 +49,20 @@ func ProcessImage(raw []byte) (*ProcessedImage, error) {
 	b := img.Bounds()
 	pi := &ProcessedImage{Width: b.Dx(), Height: b.Dy()}
 
-	if pi.FullJPEG, err = encodeJPEG(imaging.Fit(img, fullMax, fullMax, imaging.Lanczos), 82); err != nil {
+	// Largest first, then derive smaller steps from the already-resized image.
+	full := imaging.Fit(img, fullMax, fullMax, imaging.Lanczos)
+	if pi.FullJPEG, err = encodeJPEG(full, 82); err != nil {
 		return nil, err
 	}
-	if pi.ThumbJPEG, err = encodeJPEG(imaging.Fit(img, thumbMax, thumbMax, imaging.Lanczos), 78); err != nil {
+	thumb := imaging.Fit(full, thumbMax, thumbMax, imaging.Lanczos)
+	if pi.ThumbJPEG, err = encodeJPEG(thumb, 78); err != nil {
 		return nil, err
 	}
-	if pi.SmallJPEG, err = encodeJPEG(imaging.Fit(img, smallMax, smallMax, imaging.Lanczos), 76); err != nil {
+	small := imaging.Fit(thumb, smallMax, smallMax, imaging.Lanczos)
+	if pi.SmallJPEG, err = encodeJPEG(small, 76); err != nil {
 		return nil, err
 	}
-	phJPEG, err := encodeJPEG(imaging.Fit(img, phMax, phMax, imaging.Linear), 40)
+	phJPEG, err := encodeJPEG(imaging.Fit(small, phMax, phMax, imaging.Linear), 40)
 	if err != nil {
 		return nil, err
 	}

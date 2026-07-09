@@ -55,8 +55,14 @@ func NewR2Store(cfg R2Config) (*R2Store, error) {
 	}, nil
 }
 
-func (r *R2Store) Put(ctx context.Context, key, contentType string, rd io.Reader) error {
-	_, err := r.client.PutObject(ctx, r.bucket, key, rd, -1, minio.PutObjectOptions{ContentType: contentType})
+func (r *R2Store) Put(ctx context.Context, key, contentType string, size int64, rd io.Reader) error {
+	opts := minio.PutObjectOptions{
+		ContentType:  contentType,
+		UserMetadata: map[string]string{"Cache-Control": "public, max-age=31536000, immutable"},
+	}
+	// Also set the standard Cache-Control header field minio understands.
+	opts.CacheControl = "public, max-age=31536000, immutable"
+	_, err := r.client.PutObject(ctx, r.bucket, key, rd, size, opts)
 	return err
 }
 

@@ -3,7 +3,6 @@
 package backup
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -104,16 +103,21 @@ func (b *Backuper) run(ctx context.Context) error {
 	}
 	defer func() { _ = os.Remove(tmp) }()
 
-	data, err := os.ReadFile(tmp)
+	f, err := os.Open(tmp)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
 	if err != nil {
 		return err
 	}
 	key := "db/dnttg-" + time.Now().UTC().Format("20060102-150405") + ".db"
-	if _, err := b.client.PutObject(ctx, b.cfg.Bucket, key, bytes.NewReader(data), int64(len(data)),
+	if _, err := b.client.PutObject(ctx, b.cfg.Bucket, key, f, st.Size(),
 		minio.PutObjectOptions{ContentType: "application/x-sqlite3"}); err != nil {
 		return fmt.Errorf("upload to bucket %q: %w", b.cfg.Bucket, err)
 	}
-	log.Printf("backup: uploaded %s (%d bytes) to %q", key, len(data), b.cfg.Bucket)
+	log.Printf("backup: uploaded %s (%d bytes) to %q", key, st.Size(), b.cfg.Bucket)
 	// A successful upload is a successful backup — a prune hiccup must not mask it.
 	if err := b.prune(ctx); err != nil {
 		log.Printf("backup: prune failed (snapshot is safe): %v", err)

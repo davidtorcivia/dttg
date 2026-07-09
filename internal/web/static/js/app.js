@@ -142,6 +142,40 @@
     container.addEventListener('keydown', handler);
     return function () { container.removeEventListener('keydown', handler); };
   }
+  // Shared modal helpers: page lock (overflow + inert chrome) and a single
+  // anyModalOpen() gate so global shortcuts never act behind a dialog.
+  var pageLockPrev = '';
+  var pageLockDepth = 0;
+  var pageChrome = function () {
+    return document.querySelectorAll('body > :not(.search-overlay):not(.shortcuts):not(.lightbox):not(.cursor):not(.loupe):not(.smudge)');
+  };
+  function lockPage() {
+    if (pageLockDepth === 0) {
+      pageLockPrev = document.body.style.overflow || '';
+      document.body.style.overflow = 'hidden';
+      pageChrome().forEach(function (el) {
+        if ('inert' in el) el.inert = true;
+      });
+    }
+    pageLockDepth++;
+  }
+  function unlockPage() {
+    if (pageLockDepth === 0) return;
+    pageLockDepth--;
+    if (pageLockDepth === 0) {
+      document.body.style.overflow = pageLockPrev;
+      pageChrome().forEach(function (el) {
+        if ('inert' in el) el.inert = false;
+      });
+    }
+  }
+  function anyModalOpen() {
+    return !!(
+      document.querySelector('.search-overlay.open') ||
+      document.querySelector('.shortcuts.open') ||
+      document.querySelector('.lightbox.open')
+    );
+  }
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
@@ -225,9 +259,12 @@
     var input = document.getElementById('search-input');
     var close = document.getElementById('search-close');
     var results = document.getElementById('search-results');
+    var status = document.getElementById('search-status');
     if (!overlay) return;
 
+    var lastGood = '';
     var isOpen = function () { return overlay.classList.contains('open'); };
+    var setStatus = function (msg) { if (status) status.textContent = msg || ''; };
     var lastFocus = null, untrap = null;
     var open = function (e) {
       if (e) e.preventDefault();
@@ -235,6 +272,7 @@
       lastFocus = document.activeElement;
       overlay.classList.add('open');
       if (toggle) toggle.setAttribute('aria-expanded', 'true');
+      lockPage();
       untrap = trapFocus(overlay);
       // focus() is a no-op while the overlay is still visibility:hidden (it stays
       // hidden until the .open style is applied + composited), and we can't know
@@ -255,6 +293,7 @@
       overlay.classList.remove('open');
       if (toggle) toggle.setAttribute('aria-expanded', 'false');
       if (untrap) { untrap(); untrap = null; }
+      unlockPage();
       if (lastFocus && lastFocus.focus) lastFocus.focus(); // restore focus to the trigger
     };
 
@@ -263,7 +302,7 @@
     overlay.addEventListener('click', function (e) { if (e.target === overlay) hide(); });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && isOpen()) hide();
-      if (e.key === '/' && document.activeElement === document.body) open(e);
+      if (e.key === '/' && !anyModalOpen() && document.activeElement === document.body) open(e);
     });
 
     var esc = function (s) {
@@ -273,7 +312,12 @@
     };
     var render = function (items) {
       if (!results) return;
-      if (!items.length) { results.innerHTML = '<div class="search-empty">No matches</div>'; return; }
+      if (!items.length) {
+        results.innerHTML = '<div class="search-empty">No matches</div>';
+        lastGood = results.innerHTML;
+        setStatus('No matches');
+        return;
+      }
       results.innerHTML = items.map(function (it) {
         var media = it.thumb
           ? '<img src="' + esc(it.thumb) + '" alt="' + esc(it.title || 'untitled') + '">'
@@ -283,18 +327,29 @@
           '<span class="sr-main"><span class="sr-title">' + esc(it.title || '(untitled)') +
           '</span><span class="sr-meta">' + meta + '</span></span></a>';
       }).join('');
+      lastGood = results.innerHTML;
+      setStatus(items.length + ' result' + (items.length === 1 ? '' : 's'));
+    };
+    var showError = function () {
+      if (!results) return;
+      if (lastGood) results.innerHTML = lastGood;
+      else results.innerHTML = '<div class="search-empty">Couldn’t load results — try again</div>';
+      setStatus('Couldn’t load results — try again');
     };
     var timer;
     if (input && results) {
       input.addEventListener('input', function () {
         clearTimeout(timer);
         var q = input.value.trim();
-        if (!q) { results.innerHTML = ''; return; }
+        if (!q) { results.innerHTML = ''; lastGood = ''; setStatus(''); return; }
         timer = setTimeout(function () {
           fetch('/api/search?q=' + encodeURIComponent(q))
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+              if (!r.ok) throw new Error('search ' + r.status);
+              return r.json();
+            })
             .then(function (d) { render(d.results || []); })
-            .catch(function () {});
+            .catch(function () { showError(); });
         }, 200);
       });
     }
@@ -307,6 +362,8 @@
     var grid = document.getElementById('grid');
     var meta = document.querySelector('.search-meta');
     if (!form || !input || !grid) return;
+    var lastGoodHTML = grid.innerHTML;
+    var lastGoodMeta = meta ? meta.textContent : '';
     var revive = function () {
       grid.querySelectorAll('.card').forEach(function (card) {
         var img = card.querySelector('.card-img-container img');
@@ -326,18 +383,44 @@
     var timer;
     var run = function () {
       var q = input.value.trim();
-      if (!q) { grid.className = 'grid'; grid.textContent = ''; if (meta) meta.textContent = ''; return; }
+      if (!q) {
+        grid.className = 'grid';
+        grid.textContent = '';
+        lastGoodHTML = '';
+        lastGoodMeta = '';
+        if (meta) meta.textContent = '';
+        return;
+      }
       skeleton(); // contact-sheet shimmer while fetching
       fetch('/search/cards?q=' + encodeURIComponent(q))
-        .then(function (r) { return r.text(); })
+        .then(function (r) {
+          if (!r.ok) throw new Error('search cards ' + r.status);
+          return r.text();
+        })
         .then(function (html) {
           grid.innerHTML = html;
           grid.__order = null; // new result set — recapture chronological order
           revive();
           layoutMasonry(grid, true);
           var n = grid.querySelectorAll('.card').length;
-          if (meta) meta.textContent = n + ' result' + (n === 1 ? '' : 's') + ' for “' + q + '”';
-        }).catch(function () {});
+          var msg = n + ' result' + (n === 1 ? '' : 's') + ' for “' + q + '”';
+          if (meta) meta.textContent = msg;
+          lastGoodHTML = grid.innerHTML;
+          lastGoodMeta = msg;
+        }).catch(function () {
+          // Clear the skeleton and restore the last successful results when present.
+          if (lastGoodHTML) {
+            grid.innerHTML = lastGoodHTML;
+            grid.__order = null;
+            revive();
+            layoutMasonry(grid, true);
+            if (meta) meta.textContent = lastGoodMeta || 'Couldn’t load results — try again';
+          } else {
+            grid.className = 'grid';
+            grid.innerHTML = '<p class="empty">Couldn’t load results — try again</p>';
+            if (meta) meta.textContent = 'Couldn’t load results — try again';
+          }
+        });
     };
     input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 200); });
   })();
@@ -466,7 +549,7 @@
     document.addEventListener('keydown', function (e) {
       var t = e.target;
       if (t && t.matches && t.matches('input, textarea, select')) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || anyModalOpen()) return;
       if (e.key === 'ArrowLeft' && prev) window.location.href = prev.href;
       if (e.key === 'ArrowRight' && next) window.location.href = next.href;
     });
@@ -580,6 +663,8 @@
       // JS sets the theme, which is the Firefox white flash.
       try { document.cookie = 'dnttg-theme=' + theme + '; path=/; max-age=31536000; samesite=lax'; } catch (e) {}
       if (persist) { try { localStorage.setItem('dnttg-theme', theme); } catch (e) {} }
+      var tc = document.getElementById('theme-color');
+      if (tc) tc.setAttribute('content', theme === 'light' ? '#f5f3ec' : '#111111');
     };
     if (btn) btn.setAttribute('aria-pressed', root.getAttribute('data-theme') === 'dark' ? 'true' : 'false');
     window.__toggleTheme = function () {
@@ -631,16 +716,25 @@
       apply(animate);
     };
     var lbLast = null, lbUntrap = null;
+    var openLink = document.getElementById('lightbox-open');
+    var closeBtn = document.getElementById('lightbox-close');
     var open = function (z) {
       lbLast = document.activeElement;
-      img.src = z.getAttribute('data-full') || z.src;
+      var full = z.getAttribute('data-full') || z.src;
+      img.src = full;
       img.alt = z.getAttribute('alt') || '';
+      if (openLink) {
+        openLink.href = full;
+        openLink.setAttribute('target', '_blank');
+        openLink.setAttribute('rel', 'noopener');
+      }
       // rise off the plane: start low + small, then settle to rest
       scale = 1; tx = 0; ty = 0;
       img.classList.remove('lb-zoomed');
       img.style.transition = 'none';
       img.style.transform = 'translateY(22px) scale(.93)';
       box.classList.add('open');
+      lockPage();
       box.focus();
       requestAnimationFrame(function () {
         img.style.transition = 'transform .55s var(--ease-out)';
@@ -649,9 +743,11 @@
       lbUntrap = trapFocus(box);
     };
     var close = function () {
+      if (!box.classList.contains('open')) return;
       box.classList.remove('open');
       reset(false);
       if (lbUntrap) { lbUntrap(); lbUntrap = null; }
+      unlockPage();
       if (lbLast && lbLast.focus) lbLast.focus();
     };
 
@@ -659,6 +755,8 @@
       z.addEventListener('click', function () { open(z); });
     });
     box.addEventListener('click', function (e) { if (e.target === box) close(); });
+    if (closeBtn) closeBtn.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); close(); });
+    if (openLink) openLink.addEventListener('click', function (e) { e.stopPropagation(); });
     document.addEventListener('keydown', function (e) {
       if (!box.classList.contains('open')) return;
       if (e.key === 'Escape') close();
@@ -804,6 +902,7 @@
       if (!sheet || sheet.classList.contains('open')) return;
       last = document.activeElement;
       sheet.classList.add('open');
+      lockPage();
       sheet.focus();
       untrap = trapFocus(sheet);
     };
@@ -811,12 +910,16 @@
       if (!sheet || !sheet.classList.contains('open')) return;
       sheet.classList.remove('open');
       if (untrap) { untrap(); untrap = null; }
+      unlockPage();
       if (last && last.focus) last.focus();
     };
+    var closeBtn = document.getElementById('shortcuts-close');
+    if (closeBtn) closeBtn.addEventListener('click', function (e) { e.preventDefault(); closeSheet(); });
     document.addEventListener('keydown', function (e) {
       if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === '?') { if (sheet && sheet.classList.contains('open')) closeSheet(); else openSheet(); }
+      if (e.key === '?') { if (sheet && sheet.classList.contains('open')) closeSheet(); else if (!anyModalOpen()) openSheet(); }
       else if (e.key === 'Escape') { closeSheet(); }
+      else if (anyModalOpen()) return;
       else if (e.key === 'g' || e.key === 'G') { window.location.href = '/'; }
       else if (e.key === 'd' || e.key === 'D') { if (window.__toggleTheme) window.__toggleTheme(); }
     });
@@ -838,22 +941,25 @@
       list[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
     };
     document.addEventListener('keydown', function (e) {
-      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || anyModalOpen()) return;
       if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') { e.preventDefault(); focus(idx + 1); }
       else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') { e.preventDefault(); focus(idx - 1); }
       else if (e.key === 'Enter' && idx >= 0) { var l = cards()[idx]; if (l) l.click(); }
     });
   })();
 
-  // ---- infinite scroll ----
+  // ---- infinite scroll (keyset cursor) ----
   (function () {
     var sentinel = document.getElementById('board-more');
     var grid = document.getElementById('grid');
     if (!sentinel || !grid) return;
     var page = parseInt(sentinel.dataset.page || '48', 10);
-    var offset = parseInt(sentinel.dataset.offset || '0', 10);
+    var cursorCreated = sentinel.dataset.cursorCreated || '';
+    var cursorId = sentinel.dataset.cursorId || '';
     var cat = sentinel.dataset.cat || '', tag = sentinel.dataset.tag || '';
-    var done = offset < page, loading = false;
+    var done = sentinel.dataset.done === '1' || !cursorCreated || !cursorId;
+    var loading = false;
+    var retryEl = null;
     var markEnd = function () {
       if (done && grid.querySelector('.card') && !document.querySelector('.board-end')) {
         var end = document.createElement('div');
@@ -862,29 +968,69 @@
         sentinel.parentNode.insertBefore(end, sentinel.nextSibling);
       }
     };
+    var clearRetry = function () {
+      if (retryEl && retryEl.parentNode) retryEl.parentNode.removeChild(retryEl);
+      retryEl = null;
+    };
+    var showRetry = function () {
+      if (retryEl) return;
+      retryEl = document.createElement('button');
+      retryEl.type = 'button';
+      retryEl.className = 'board-retry';
+      retryEl.textContent = 'Couldn’t load more — retry';
+      retryEl.addEventListener('click', function () { clearRetry(); load(); });
+      sentinel.parentNode.insertBefore(retryEl, sentinel.nextSibling);
+    };
     var load = function () {
       if (loading || done) { markEnd(); return; }
+      if (!cursorCreated || !cursorId) { done = true; markEnd(); return; }
       loading = true;
-      var q = '/board/more?offset=' + offset + (cat ? '&cat=' + encodeURIComponent(cat) : '') + (tag ? '&tag=' + encodeURIComponent(tag) : '');
-      fetch(q).then(function (r) { return r.text(); }).then(function (html) {
+      var q = '/board/more?cursor=' + encodeURIComponent(cursorCreated + ':' + cursorId) +
+        (cat ? '&cat=' + encodeURIComponent(cat) : '') +
+        (tag ? '&tag=' + encodeURIComponent(tag) : '');
+      fetch(q).then(function (r) {
+        if (!r.ok) throw new Error('board more ' + r.status);
+        return r.text();
+      }).then(function (html) {
         var tmp = document.createElement('div');
         tmp.innerHTML = html;
         var added = tmp.querySelectorAll('.card');
+        var lastCard = null;
         added.forEach(function (card) {
           var img = card.querySelector('.card-img-container img');
           if (img) { blurUp(img); observeEager(img); }
           var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
           card.classList.add('visible');
           masonryAppend(grid, card);
+          lastCard = card;
         });
-        offset += added.length;
+        // Advance cursor only after cards are appended (from last card's data-id / time if present).
+        if (lastCard) {
+          var idAttr = lastCard.getAttribute('data-id') || (lastCard.querySelector('[data-id]') && lastCard.querySelector('[data-id]').getAttribute('data-id'));
+          var createdAttr = lastCard.getAttribute('data-created');
+          if (idAttr) cursorId = idAttr;
+          if (createdAttr) cursorCreated = createdAttr;
+          // Fallback: parse detail URL /item/N
+          if (!idAttr) {
+            var a = lastCard.tagName === 'A' ? lastCard : lastCard.querySelector('a[href^="/item/"]');
+            if (a) {
+              var m = (a.getAttribute('href') || '').match(/\/item\/(\d+)/);
+              if (m) cursorId = m[1];
+            }
+          }
+        }
         if (added.length < page) { done = true; markEnd(); }
+        clearRetry();
         loading = false;
-      }).catch(function () { loading = false; });
+      }).catch(function () {
+        loading = false;
+        showRetry();
+      });
     };
     // Load the next batch well ahead (~1.5k px) so cards exist before the eager
     // image observer reaches for them — keeps thumbnails from popping in on scroll.
     new IntersectionObserver(function (en) { en.forEach(function (x) { if (x.isIntersecting) load(); }); }, { rootMargin: '1500px' }).observe(sentinel);
+    if (done) markEnd();
   })();
 
   // ---- intent prefetch: warm same-origin detail pages on hover/focus/touch ----

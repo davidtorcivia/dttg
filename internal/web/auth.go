@@ -69,6 +69,13 @@ func HashToken(tok string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// HashSession stores session IDs as their SHA-256, same as API tokens. The
+// browser cookie still carries the raw random ID; only the hash is persisted.
+func HashSession(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
 func newSessionID() string {
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
@@ -80,7 +87,7 @@ func (s *Server) isAdmin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	ok, _ := s.store.SessionValid(r.Context(), c.Value)
+	ok, _ := s.store.SessionValid(r.Context(), HashSession(c.Value))
 	return ok
 }
 
@@ -114,13 +121,17 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, "login.html", s.page(r, "LOGIN"))
+	pd := s.page(r, "LOGIN")
+	pd.Next = r.URL.Query().Get("next")
+	s.render(w, "login.html", pd)
 }
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
+	next := r.FormValue("next")
 	if blocked, retry := s.loginRL.blocked(ip); blocked {
 		pd := s.page(r, "LOGIN")
+		pd.Next = next
 		pd.Error = "Too many attempts. Try again later."
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -130,6 +141,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	pw := r.FormValue("password")
 	hash, _ := s.store.GetSetting(r.Context(), "password_hash")
 	pd := s.page(r, "LOGIN")
+	pd.Next = next
 	switch {
 	case hash == "":
 		pd.Error = "No password configured. Run: dnttg set-password <password>"
@@ -143,18 +155,27 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.loginRL.reset(ip)
 		sid := newSessionID()
-		if err := s.store.CreateSession(r.Context(), sid, sessionTTL); err != nil {
+		if err := s.store.CreateSession(r.Context(), HashSession(sid), sessionTTL); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
 		s.setSessionCookie(w, sid)
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, safeNext(next), http.StatusSeeOther)
 	}
+}
+
+// safeNext returns dest when it is a same-origin relative path (starts with "/"
+// and not "//"); otherwise "/".
+func safeNext(dest string) string {
+	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
+		return "/"
+	}
+	return dest
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		_ = s.store.DeleteSession(r.Context(), c.Value)
+		_ = s.store.DeleteSession(r.Context(), HashSession(c.Value))
 	}
 	s.clearSessionCookie(w)
 	http.Redirect(w, r, "/", http.StatusSeeOther)

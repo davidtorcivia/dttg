@@ -30,7 +30,7 @@ func New(st *store.Store, ms media.Store) *Service {
 	return &Service{
 		store: st,
 		media: ms,
-		http:  &http.Client{Timeout: 20 * time.Second},
+		http:  newSafeHTTPClient(20 * time.Second),
 	}
 }
 
@@ -82,9 +82,15 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 	switch {
 	case len(in.FileBytes) > 0:
 		ct := sniffContentType(in.FileName, in.FileBytes)
-		if strings.HasPrefix(ct, "image/") {
+		switch {
+		case strings.HasPrefix(ct, "image/"):
 			kind, imageBytes, imageCT = "image", in.FileBytes, ct
-		} else {
+		case strings.HasPrefix(ct, "video/"):
+			if len(in.FileBytes) > videoEmbedMax {
+				return 0, fmt.Errorf("video too large to self-host (max %d MB)", videoEmbedMax>>20)
+			}
+			kind, videoBytes, videoCT, videoName = "embed", in.FileBytes, ct, in.FileName
+		default:
 			kind, docBytes, docCT, docName = "document", in.FileBytes, ct, in.FileName
 		}
 
@@ -154,7 +160,7 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 				kind = "image"
 				imageBytes, imageCT = r.Body, r.ContentType
 			case strings.HasPrefix(r.ContentType, "video/"):
-				if len(r.Body) > 0 && len(r.Body) < videoEmbedMax {
+				if len(r.Body) > 0 && len(r.Body) <= videoEmbedMax {
 					kind = "embed"
 					videoBytes, videoCT = r.Body, r.ContentType
 					videoName = fileNameFromURL(r.FinalURL)
@@ -196,6 +202,8 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 	}
 
 	var mediaRows []store.Media
+	private := it.Visibility == "private"
+	var written []string // storage keys for best-effort cleanup on later failure
 
 	// Refine + store the cover image, if any.
 	if len(imageBytes) > 0 {
@@ -211,9 +219,10 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 				{fullKey, "image/jpeg", proc.FullJPEG},
 				{thumbKey, "image/jpeg", proc.ThumbJPEG},
 				{smallKey, "image/jpeg", proc.SmallJPEG},
-			}); err != nil {
+			}, private); err != nil {
 				return 0, err
 			}
+			written = append(written, origKey, fullKey, thumbKey, smallKey)
 
 			it.CoverKey = fullKey
 			it.ThumbKey = thumbKey
@@ -222,14 +231,22 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 			it.DominantColor = proc.DominantColor
 			it.Width, it.Height = proc.Width, proc.Height
 
+			oL, oR := s.mediaFlags(origKey, private)
+			fL, fR := s.mediaFlags(fullKey, private)
+			tL, tR := s.mediaFlags(thumbKey, private)
+			sL, sR := s.mediaFlags(smallKey, private)
 			mediaRows = append(mediaRows,
-				store.Media{Variant: "original", StorageKey: origKey, ContentType: imageCT, Bytes: int64(len(imageBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
-				store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: !s.media.Mirrors(fullKey), OnR2: s.media.Mirrors(fullKey)},
-				store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: !s.media.Mirrors(thumbKey), OnR2: s.media.Mirrors(thumbKey)},
-				store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: !s.media.Mirrors(smallKey), OnR2: s.media.Mirrors(smallKey)},
+				store.Media{Variant: "original", StorageKey: origKey, ContentType: imageCT, Bytes: int64(len(imageBytes)), OnLocal: oL, OnR2: oR},
+				store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: fL, OnR2: fR},
+				store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: tL, OnR2: tR},
+				store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: sL, OnR2: sR},
 			)
-		} else if kind == "image" && in.URL != "" {
-			it.CoverRemoteURL = in.URL // processing failed; degrade to remote display
+		} else if kind == "image" {
+			// Image processing failed: do not create a broken image item.
+			if in.URL == "" {
+				return 0, fmt.Errorf("ingest: image processing failed: %w", err)
+			}
+			it.CoverRemoteURL = in.URL // remote URL only — no local media
 		}
 	}
 
@@ -239,9 +256,11 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		ext := extForDoc(docCT, docName)
 		fileKey := fmt.Sprintf("items/%s/file%s", asset, ext)
 		ct := orDefault(docCT, "application/octet-stream")
-		if err := s.media.Put(ctx, fileKey, ct, bytes.NewReader(docBytes)); err != nil {
+		if err := s.putBlob(ctx, fileKey, ct, docBytes, private); err != nil {
+			s.cleanupKeys(ctx, written)
 			return 0, err
 		}
+		written = append(written, fileKey)
 		if docName == "" {
 			docName = "file" + ext
 		}
@@ -250,8 +269,9 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		it.FileMime = ct
 		it.FileSize = int64(len(docBytes))
 		setIfEmpty(&it.Title, docName)
+		dL, dR := s.mediaFlags(fileKey, private)
 		mediaRows = append(mediaRows,
-			store.Media{Variant: "file", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(docBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)},
+			store.Media{Variant: "file", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(docBytes)), OnLocal: dL, OnR2: dR},
 		)
 	}
 
@@ -261,9 +281,11 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		ext := extForVideo(videoCT, videoName)
 		fileKey := fmt.Sprintf("items/%s/video%s", asset, ext)
 		ct := orDefault(videoCT, "application/octet-stream")
-		if err := s.media.Put(ctx, fileKey, ct, bytes.NewReader(videoBytes)); err != nil {
+		if err := s.putBlob(ctx, fileKey, ct, videoBytes, private); err != nil {
+			s.cleanupKeys(ctx, written)
 			return 0, err
 		}
+		written = append(written, fileKey)
 		if videoName == "" {
 			videoName = "video" + ext
 		}
@@ -273,38 +295,25 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		it.FileSize = int64(len(videoBytes))
 		it.EmbedProvider = "Video"
 		setIfEmpty(&it.Title, videoName)
+		vL, vR := s.mediaFlags(fileKey, private)
 		mediaRows = append(mediaRows,
-			store.Media{Variant: "video", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(videoBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)},
+			store.Media{Variant: "video", StorageKey: fileKey, ContentType: ct, Bytes: int64(len(videoBytes)), OnLocal: vL, OnR2: vR},
 		)
 	}
 
 	if c := strings.TrimSpace(in.Category); c != "" {
 		catID, err := s.store.GetOrCreateCategory(ctx, c)
 		if err != nil {
+			s.cleanupKeys(ctx, written)
 			return 0, err
 		}
 		it.CategoryID = catID
 	}
 
-	id, err := s.store.CreateItem(ctx, it)
+	id, err := s.store.CreateItemWithMediaAndTags(ctx, it, mediaRows, in.Tags)
 	if err != nil {
+		s.cleanupKeys(ctx, written)
 		return 0, err
-	}
-	for _, mr := range mediaRows {
-		mr.ItemID = id
-		if _, err := s.store.AddMedia(ctx, mr); err != nil {
-			return 0, err
-		}
-	}
-	for _, t := range in.Tags {
-		if t = strings.TrimSpace(t); t == "" {
-			continue
-		}
-		tagID, err := s.store.GetOrCreateTag(ctx, t)
-		if err != nil {
-			continue
-		}
-		_ = s.store.AttachTag(ctx, id, tagID)
 	}
 	return id, nil
 }
@@ -325,10 +334,12 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 	if it == nil {
 		return fmt.Errorf("ingest: item %d not found", itemID)
 	}
+	private := it.Visibility == "private"
 
 	ct := sniffContentType(fileName, fileBytes)
 	var next store.Item // only the media-related fields are used
 	var mediaRows []store.Media
+	var newKeys []string
 
 	switch {
 	case strings.HasPrefix(ct, "image/"):
@@ -346,9 +357,10 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 			{fullKey, "image/jpeg", proc.FullJPEG},
 			{thumbKey, "image/jpeg", proc.ThumbJPEG},
 			{smallKey, "image/jpeg", proc.SmallJPEG},
-		}); err != nil {
+		}, private); err != nil {
 			return err
 		}
+		newKeys = append(newKeys, origKey, fullKey, thumbKey, smallKey)
 		next.Kind = "image"
 		next.CoverKey = fullKey
 		next.ThumbKey = thumbKey
@@ -356,11 +368,15 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		next.Placeholder = proc.Placeholder
 		next.DominantColor = proc.DominantColor
 		next.Width, next.Height = proc.Width, proc.Height
+		oL, oR := s.mediaFlags(origKey, private)
+		fL, fR := s.mediaFlags(fullKey, private)
+		tL, tR := s.mediaFlags(thumbKey, private)
+		sL, sR := s.mediaFlags(smallKey, private)
 		mediaRows = append(mediaRows,
-			store.Media{Variant: "original", StorageKey: origKey, ContentType: ct, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(origKey)},
-			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: !s.media.Mirrors(fullKey), OnR2: s.media.Mirrors(fullKey)},
-			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: !s.media.Mirrors(thumbKey), OnR2: s.media.Mirrors(thumbKey)},
-			store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: !s.media.Mirrors(smallKey), OnR2: s.media.Mirrors(smallKey)},
+			store.Media{Variant: "original", StorageKey: origKey, ContentType: ct, Bytes: int64(len(fileBytes)), OnLocal: oL, OnR2: oR},
+			store.Media{Variant: "full", StorageKey: fullKey, ContentType: "image/jpeg", Width: proc.Width, Height: proc.Height, Bytes: int64(len(proc.FullJPEG)), OnLocal: fL, OnR2: fR},
+			store.Media{Variant: "thumb", StorageKey: thumbKey, ContentType: "image/jpeg", Bytes: int64(len(proc.ThumbJPEG)), OnLocal: tL, OnR2: tR},
+			store.Media{Variant: "small", StorageKey: smallKey, ContentType: "image/jpeg", Bytes: int64(len(proc.SmallJPEG)), OnLocal: sL, OnR2: sR},
 		)
 
 	case strings.HasPrefix(ct, "video/"):
@@ -371,9 +387,10 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		ext := extForVideo(ct, fileName)
 		fileKey := fmt.Sprintf("items/%s/video%s", asset, ext)
 		c := orDefault(ct, "application/octet-stream")
-		if err := s.media.Put(ctx, fileKey, c, bytes.NewReader(fileBytes)); err != nil {
+		if err := s.putBlob(ctx, fileKey, c, fileBytes, private); err != nil {
 			return err
 		}
+		newKeys = append(newKeys, fileKey)
 		name := fileName
 		if name == "" {
 			name = "video" + ext
@@ -381,44 +398,39 @@ func (s *Service) ReplaceFile(ctx context.Context, itemID int64, fileBytes []byt
 		next.Kind = "embed"
 		next.EmbedProvider = "Video"
 		next.FileKey, next.FileName, next.FileMime, next.FileSize = fileKey, name, c, int64(len(fileBytes))
+		vL, vR := s.mediaFlags(fileKey, private)
 		mediaRows = append(mediaRows,
-			store.Media{Variant: "video", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)})
+			store.Media{Variant: "video", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: vL, OnR2: vR})
 
 	default:
 		asset := randAsset()
 		ext := extForDoc(ct, fileName)
 		fileKey := fmt.Sprintf("items/%s/file%s", asset, ext)
 		c := orDefault(ct, "application/octet-stream")
-		if err := s.media.Put(ctx, fileKey, c, bytes.NewReader(fileBytes)); err != nil {
+		if err := s.putBlob(ctx, fileKey, c, fileBytes, private); err != nil {
 			return err
 		}
+		newKeys = append(newKeys, fileKey)
 		name := fileName
 		if name == "" {
 			name = "file" + ext
 		}
 		next.Kind = "document"
 		next.FileKey, next.FileName, next.FileMime, next.FileSize = fileKey, name, c, int64(len(fileBytes))
+		dL, dR := s.mediaFlags(fileKey, private)
 		mediaRows = append(mediaRows,
-			store.Media{Variant: "file", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: true, OnR2: s.media.Mirrors(fileKey)})
+			store.Media{Variant: "file", StorageKey: fileKey, ContentType: c, Bytes: int64(len(fileBytes)), OnLocal: dL, OnR2: dR})
 	}
 
-	// New blobs are stored; now drop the old ones and rewrite the item's media.
-	if old, lerr := s.store.ListMediaForItem(ctx, itemID); lerr == nil {
-		for _, m := range old {
-			_ = s.media.Delete(ctx, m.StorageKey)
-		}
-	}
-	if err := s.store.ClearMediaForItem(ctx, itemID); err != nil {
+	// Snapshot old keys before the DB transaction so we can delete them only
+	// after the new media rows commit.
+	old, _ := s.store.ListMediaForItem(ctx, itemID)
+	if err := s.store.ReplaceItemMedia(ctx, itemID, next, mediaRows); err != nil {
+		s.cleanupKeys(ctx, newKeys)
 		return err
 	}
-	if err := s.store.UpdateItemMedia(ctx, itemID, next); err != nil {
-		return err
-	}
-	for _, mr := range mediaRows {
-		mr.ItemID = itemID
-		if _, err := s.store.AddMedia(ctx, mr); err != nil {
-			return err
-		}
+	for _, m := range old {
+		_ = s.media.Delete(ctx, m.StorageKey)
 	}
 	return nil
 }
@@ -428,13 +440,56 @@ type blob struct {
 	data             []byte
 }
 
-func (s *Service) putAll(ctx context.Context, blobs []blob) error {
-	for _, b := range blobs {
-		if err := s.media.Put(ctx, b.key, b.contentType, bytes.NewReader(b.data)); err != nil {
-			return fmt.Errorf("store %s: %w", b.key, err)
+// putBlob writes one blob. Private items stay local-only (never R2/CDN).
+func (s *Service) putBlob(ctx context.Context, key, contentType string, data []byte, private bool) error {
+	r := bytes.NewReader(data)
+	size := int64(len(data))
+	if private {
+		switch m := s.media.(type) {
+		case *media.LocalStore:
+			return m.PutPrivate(ctx, key, contentType, r, size)
+		case *media.MirrorStore:
+			return m.PutPrivate(ctx, key, contentType, r, size)
 		}
 	}
+	return s.media.Put(ctx, key, contentType, size, r)
+}
+
+func (s *Service) putAll(ctx context.Context, blobs []blob, private bool) error {
+	var written []string
+	for _, b := range blobs {
+		if err := s.putBlob(ctx, b.key, b.contentType, b.data, private); err != nil {
+			s.cleanupKeys(ctx, written)
+			return fmt.Errorf("store %s: %w", b.key, err)
+		}
+		written = append(written, b.key)
+	}
 	return nil
+}
+
+func (s *Service) cleanupKeys(ctx context.Context, keys []string) {
+	for _, k := range keys {
+		_ = s.media.Delete(ctx, k)
+	}
+}
+
+// mediaFlags records storage location for a written key.
+func (s *Service) mediaFlags(key string, private bool) (onLocal, onR2 bool) {
+	if private {
+		return true, false
+	}
+	if s.media.Mirrors(key) {
+		// Image variants on MirrorStore are R2-only.
+		base := key
+		if i := strings.LastIndex(key, "/"); i >= 0 {
+			base = key[i+1:]
+		}
+		if strings.HasPrefix(base, "full") || strings.HasPrefix(base, "thumb") || strings.HasPrefix(base, "small") {
+			return false, true
+		}
+		return true, true
+	}
+	return true, false
 }
 
 func randAsset() string {
