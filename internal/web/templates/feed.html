@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"{{if .ThemeAttr}} data-theme="{{.ThemeAttr}}"{{end}}>
+<head>
+  <title>Feed — {{.Cfg.SiteTitle}}</title>
+  {{template "headtags" .}}
+  {{template "seo" .}}
+</head>
+<body>
+  {{template "sysheader" .}}
+  <main id="maincontent" tabindex="-1">
+  <div class="admin admin-form remote-feed-page">
+    <div class="admin-head">
+      <h1>Feed</h1>
+      <form method="POST" action="/feed/sync">{{template "csrf" .}}
+        <button type="submit" class="btn">Refresh all</button>
+      </form>
+    </div>
+
+    {{if .Error}}<div class="flash flash-error" role="status">{{.Error}}</div>{{end}}
+
+    <form method="POST" action="/feed/sources" class="remote-follow-form">{{template "csrf" .}}
+      <label>Follow JSON Feed
+        <span>Paste another DNTTG instance’s <code>/feed.json</code> URL.</span>
+        <input type="url" name="feed_url" placeholder="https://example.com/feed.json" required>
+      </label>
+      <div class="form-actions">
+        <button type="submit">Follow</button>
+      </div>
+    </form>
+
+    {{- if .RemoteFeeds}}
+    <section class="remote-source-list" aria-label="Followed sources">
+      <h2 class="remote-section-title">Sources</h2>
+      <ul>
+        {{- range .RemoteFeeds}}
+        <li class="remote-source{{if not .Active}} remote-source-inactive{{end}}">
+          <div class="remote-source-meta">
+            <strong>{{if .Title}}{{.Title}}{{else}}{{.FeedURL}}{{end}}</strong>
+            <a href="{{.FeedURL}}" rel="noopener noreferrer">{{.FeedURL}}</a>
+            {{- if not .LastSuccessAt.IsZero}}
+            <span class="muted">Last success {{shortDate .LastSuccessAt}}</span>
+            {{- end}}
+            {{- if .LastError}}
+            <span class="login-error">{{.LastError}}</span>
+            {{- end}}
+            {{- if not .Active}}
+            <span class="muted">Unfollowed</span>
+            {{- end}}
+          </div>
+          <div class="remote-source-actions">
+            {{- if .Active}}
+            <form method="POST" action="/feed/sources/{{.ID}}/sync">{{template "csrf" $}}
+              <button type="submit">Fetch now</button>
+            </form>
+            <form method="POST" action="/feed/sources/{{.ID}}/unfollow">{{template "csrf" $}}
+              <button type="submit">Unfollow</button>
+            </form>
+            {{- end}}
+          </div>
+        </li>
+        {{- end}}
+      </ul>
+    </section>
+    {{- end}}
+
+    <section class="remote-item-list" aria-label="Remote items">
+      <h2 class="remote-section-title">Items</h2>
+      {{- if not .RemoteItems}}
+      <p class="empty">No remote items yet. Follow a feed and fetch it.</p>
+      {{- else}}
+      <div class="remote-cards">
+        {{- range .RemoteItems}}
+        <article class="remote-card">
+          <div class="remote-card-source">{{if .FeedTitle}}{{.FeedTitle}}{{else}}{{.FeedURL}}{{end}}</div>
+          {{- if .ImageURL}}
+          <div class="remote-card-media">
+            <img src="{{.ImageURL}}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          </div>
+          {{- end}}
+          <h3 class="remote-card-title">
+            {{- if .URL}}<a href="{{.URL}}" rel="noopener noreferrer">{{if .Title}}{{.Title}}{{else}}Untitled{{end}}</a>
+            {{- else if .ExternalURL}}<a href="{{.ExternalURL}}" rel="noopener noreferrer">{{if .Title}}{{.Title}}{{else}}Untitled{{end}}</a>
+            {{- else}}{{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+            {{- end}}
+          </h3>
+          {{- if .ContentText}}<p class="remote-card-text">{{.ContentText}}</p>{{end}}
+          <div class="remote-card-meta">
+            <span>{{shortDate .PublishedAt}}</span>
+            {{- if and .URL .ExternalURL}}
+            <a href="{{.ExternalURL}}" rel="noopener noreferrer">external</a>
+            {{- else if .ExternalURL}}
+            <a href="{{.ExternalURL}}" rel="noopener noreferrer">external</a>
+            {{- end}}
+          </div>
+          <div class="remote-card-actions">
+            {{- if .RepostedItemID}}
+            <a href="/item/{{.RepostedItemID}}">Reposted → Plate {{pad3 .RepostedItemID}}</a>
+            {{- else}}
+            <form method="POST" action="/feed/items/{{.ID}}/repost">{{template "csrf" $}}
+              <button type="submit">Repost</button>
+            </form>
+            {{- end}}
+          </div>
+        </article>
+        {{- end}}
+      </div>
+      {{- if and (not .BoardDone) .CursorID}}
+      <p class="admin-more"><a class="btn" href="/feed?cursor={{.CursorCreated}}:{{.CursorID}}">Older</a></p>
+      {{- end}}
+      {{- end}}
+    </section>
+  </div>
+  </main>
+  {{template "tail" .}}
+</body>
+</html>

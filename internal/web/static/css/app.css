@@ -224,6 +224,38 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .danger button:hover { border-color:#c0392b; }
 @media (max-width:700px) { .edit-layout { grid-template-columns:1fr; } }
 
+/* ---------- remote feed (federation) ---------- */
+.remote-feed-page { max-width:720px; }
+.remote-section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); font-weight:500; margin:2.5rem 0 1rem; }
+.remote-follow-form { margin-bottom:1rem; }
+.remote-source-list ul { list-style:none; margin:0; padding:0; }
+.remote-source { display:flex; justify-content:space-between; gap:1.5rem; align-items:flex-start; padding:1rem 0; border-bottom:1px solid var(--line); font-size:.8rem; }
+.remote-source-inactive { opacity:.55; }
+.remote-source-meta { display:flex; flex-direction:column; gap:.35rem; min-width:0; }
+.remote-source-meta a { color:var(--faint); text-decoration:none; word-break:break-all; font-size:.72rem; }
+.remote-source-meta a:hover { color:var(--text); }
+.remote-source-actions { display:flex; gap:1rem; flex-shrink:0; }
+.remote-source-actions form { display:inline; }
+.remote-source-actions button { background:none; border:none; font:inherit; color:var(--faint); text-transform:uppercase; letter-spacing:.08em; font-size:.65rem; cursor:pointer; padding:0; }
+.remote-source-actions button:hover { color:var(--text); }
+.remote-cards { display:flex; flex-direction:column; gap:1.5rem; }
+.remote-card { border:1px solid var(--line); padding:1.1rem 1.2rem; }
+.remote-card-source { font-size:.62rem; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); margin-bottom:.6rem; }
+.remote-card-media { margin:0 0 .9rem; background:var(--line); }
+.remote-card-media img { display:block; width:100%; max-height:280px; object-fit:cover; }
+.remote-card-title { font-size:1rem; font-weight:500; margin:0 0 .5rem; line-height:1.35; }
+.remote-card-title a { text-decoration:none; color:inherit; border-bottom:1px solid transparent; }
+.remote-card-title a:hover { border-color:var(--text); }
+.remote-card-text { font-size:.85rem; color:var(--muted); margin:0 0 .75rem; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+.remote-card-meta { display:flex; gap:1rem; font-size:.65rem; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); margin-bottom:.75rem; }
+.remote-card-meta a { color:var(--faint); text-decoration:none; }
+.remote-card-meta a:hover { color:var(--text); }
+.remote-card-actions { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; }
+.remote-card-actions a { color:var(--faint); text-decoration:none; }
+.remote-card-actions a:hover { color:var(--text); }
+.remote-card-actions button { background:var(--text); color:var(--bg); border:none; padding:.5rem 1rem; font:inherit; font-size:.65rem; text-transform:uppercase; letter-spacing:.1em; cursor:pointer; }
+.admin-more { margin-top:2rem; }
+
 /* ---------- header search ---------- */
 .header-left { display:flex; align-items:center; gap:.6rem; }
 .header-left a:first-child { text-decoration:none; }

@@ -44,10 +44,13 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 	type jf struct {
 		ID            string         `json:"id"`
 		URL           string         `json:"url"`
+		ExternalURL   string         `json:"external_url,omitempty"`
 		Title         string         `json:"title"`
 		ContentText   string         `json:"content_text,omitempty"`
+		Summary       string         `json:"summary,omitempty"`
 		Image         string         `json:"image,omitempty"`
 		DatePublished string         `json:"date_published"`
+		DateModified  string         `json:"date_modified,omitempty"`
 		Attachments   []jfAttachment `json:"attachments,omitempty"`
 	}
 	var arr []jf
@@ -60,6 +63,20 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 			ContentText:   it.Note,
 			Image:         s.absURL(v.CoverURL),
 			DatePublished: it.CreatedAt.Format(time.RFC3339),
+		}
+		if it.SourceURL != "" {
+			item.ExternalURL = it.SourceURL
+		}
+		switch {
+		case it.LinkDescription != "":
+			item.Summary = it.LinkDescription
+		case it.Note != "":
+			item.Summary = it.Note
+		case it.Title != "":
+			item.Summary = it.Title
+		}
+		if !it.UpdatedAt.IsZero() {
+			item.DateModified = it.UpdatedAt.Format(time.RFC3339)
 		}
 		if isVideoItem(it) && v.FileURL != "" {
 			item.Attachments = []jfAttachment{{
@@ -77,6 +94,9 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 		"title":         s.siteTitle(),
 		"home_page_url": s.siteBaseURL(),
 		"feed_url":      s.siteBaseURL() + "/feed.json",
+		"description":   s.metaDescription(),
+		"icon":          s.absURL("/static/icons/icon-512.png"),
+		"favicon":       s.absURL("/favicon.svg"),
 		"items":         arr,
 	})
 }

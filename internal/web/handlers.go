@@ -66,6 +66,8 @@ type pageData struct {
 	CursorCreated int64
 	CursorID      int64
 	BoardDone     bool // fewer than boardPage items => no more pages
+	RemoteFeeds   []store.RemoteFeed
+	RemoteItems   []store.RemoteFeedItem
 }
 
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
