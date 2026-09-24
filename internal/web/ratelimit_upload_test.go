@@ -6,13 +6,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"donottouchtheglass/internal/config"
-	"donottouchtheglass/internal/ingest"
-	"donottouchtheglass/internal/media"
 )
 
 func TestTranslateRateLimit(t *testing.T) {
@@ -69,7 +64,7 @@ func TestTranslateCacheHit(t *testing.T) {
 }
 
 func TestAPICreateUploadTooLarge(t *testing.T) {
-	s := newTestServerWithIngest(t)
+	s := newTestServer(t)
 	plain := "smoke-token-xyz"
 	if _, err := s.store.CreateToken(context.Background(), "smoke", HashToken(plain)); err != nil {
 		t.Fatal(err)
@@ -111,7 +106,7 @@ func TestAPICreateUploadTooLarge(t *testing.T) {
 }
 
 func TestAPICreateTokenRateLimit(t *testing.T) {
-	s := newTestServerWithIngest(t)
+	s := newTestServer(t)
 	s.apiCreateTokenRL = newTokenBucket(0.001, 2)
 	s.apiCreateIPRL = newTokenBucket(100, 100) // don't trip IP limit
 	plain := "tok-rl-1"
@@ -142,29 +137,16 @@ func TestAPICreateTokenRateLimit(t *testing.T) {
 
 func TestTokenBucketAllow(t *testing.T) {
 	tb := newTokenBucket(100, 2)
-	if !tb.Allow("a") || !tb.Allow("a") {
-		t.Fatal("burst should allow 2")
+	allow := func(k string) bool { ok, _ := tb.allow(k); return ok }
+	for i := 0; i < 2; i++ {
+		if !allow("a") {
+			t.Fatal("burst should allow 2")
+		}
 	}
-	if tb.Allow("a") {
+	if allow("a") {
 		t.Fatal("third should deny")
 	}
-	if !tb.Allow("b") {
+	if !allow("b") {
 		t.Fatal("other key should allow")
 	}
-}
-
-func newTestServerWithIngest(t *testing.T) *Server {
-	t.Helper()
-	s := newTestServer(t)
-	ms, err := media.NewLocalStore(filepath.Join(t.TempDir(), "media2"), "/media")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.media = ms
-	s.ingest = ingest.New(s.store, ms)
-	if s.cfg.BaseURL == "" {
-		s.cfg = config.Config{BaseURL: "http://localhost:8080", SiteTitle: "TEST"}
-	}
-	s.loadSite(context.Background())
-	return s
 }

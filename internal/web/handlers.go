@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -42,7 +41,7 @@ type pageData struct {
 	ActiveCat      string
 	ActiveTag      string
 	Error          string
-	Next           string             // login form: safe return path after auth
+	Next           string // login form: safe return path after auth
 	Items          []itemView
 	Item           *itemView
 	TagsCSV        string             // edit form: current tags as comma-separated text
@@ -62,10 +61,10 @@ type pageData struct {
 	Nonce          string             // per-request CSP nonce for inline <script> tags
 	CSRFToken      string             // session-bound token for admin POST forms
 	Maintenance    *maintenanceReport // admin maintenance/orphan scan
-	// Keyset cursor for infinite scroll (last item on the board page).
+	// Keyset cursor for infinite scroll / "load more" (last item on the page).
 	CursorCreated int64
 	CursorID      int64
-	BoardDone     bool // fewer than boardPage items => no more pages
+	BoardDone     bool // a short page => no more pages
 	RemoteFeeds   []store.RemoteFeed
 	RemoteItems   []store.RemoteFeedItem
 }
@@ -74,32 +73,30 @@ const boardPage = 48 // items per board page (initial load + each infinite-scrol
 
 func (s *Server) page(r *http.Request, title string) pageData {
 	isAdmin := s.isAdmin(r)
-	cats := s.cachedCategories(r.Context(), isAdmin)
 	// The client mirrors an explicit light/dark choice into this cookie so the server
 	// can declare color-scheme in the served HTML head from byte 0. That makes the
 	// browser's very first paint (including the canvas it shows between page
 	// navigations) match the chosen theme — which is what kills the white flash in
 	// Firefox, where a JS-set color-scheme lands too late. No cookie => follow the OS.
-	colorScheme := "light dark"
-	themeAttr := ""
+	colorScheme, themeAttr := "light dark", ""
 	if c, err := r.Cookie("dnttg-theme"); err == nil && (c.Value == "dark" || c.Value == "light") {
-		colorScheme = c.Value
-		themeAttr = c.Value
+		colorScheme, themeAttr = c.Value, c.Value
 	}
-	nonce := nonceFromContext(r.Context())
 	// Overlay the admin-editable branding onto the per-request config copy so every
 	// template ({{.Cfg.SiteTitle}} etc.) renders the effective values.
 	site := s.siteID()
 	cfg := s.cfg
 	cfg.SiteTitle, cfg.SiteTagline, cfg.BaseURL = site.Title, site.Tagline, site.BaseURL
+	sd := s.siteData(r.Context())
 	pd := pageData{
-		Cfg:         cfg,
-		IsAdmin:     isAdmin,
-		Categories:  cats,
-		PageTitle:   title,
-		ColorScheme: colorScheme,
-		ThemeAttr:   themeAttr,
-		Nonce:       nonce,
+		Cfg:          cfg,
+		IsAdmin:      isAdmin,
+		Categories:   sd.catsPublic,
+		PageTitle:    title,
+		ColorScheme:  colorScheme,
+		ThemeAttr:    themeAttr,
+		Nonce:        nonceFromContext(r.Context()),
+		BoardColumns: sd.boardColumns,
 		Meta: metaTags{
 			Description: s.metaDescription(),
 			URL:         s.absURL(r.URL.Path),
@@ -107,11 +104,14 @@ func (s *Server) page(r *http.Request, title string) pageData {
 			Type:        "website",
 		},
 	}
-	// Inject the analytics snippet on public views only (don't track admin/self).
-	if !isAdmin {
-		pd.TrackingScript = s.cachedTrackingHTML(r.Context(), nonce)
-	} else if c, err := r.Cookie(sessionCookie); err == nil {
-		pd.CSRFToken = s.csrfToken(c.Value) // for admin POST forms
+	if isAdmin {
+		pd.Categories = sd.catsAdmin
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			pd.CSRFToken = s.csrfToken(c.Value) // for admin POST forms
+		}
+	} else {
+		// Inject the analytics snippet on public views only (don't track admin/self).
+		pd.TrackingScript = sanitizeTrackingSnippet(sd.tracking, pd.Nonce)
 	}
 	return pd
 }
@@ -128,212 +128,186 @@ func (s *Server) absURL(u string) string {
 // through the app gateway so R2/CDN URLs never leak private bytes. Public media
 // may use the media store URL (R2/CDN when configured).
 func (s *Server) mediaURL(key, visibility string) string {
-	if key == "" {
+	switch {
+	case key == "":
 		return ""
-	}
-	if visibility == "private" {
+	case visibility == "private":
 		return "/media/" + strings.TrimLeft(key, "/")
 	}
 	return s.media.URL(key)
 }
 
-// coverURL resolves the full image for an item. The media store decides whether
-// that resolves to the R2 custom domain or the local /media path; remote-hosted
-// covers (not yet processed) fall back to their original URL.
-func (s *Server) coverURL(it store.Item) string {
-	if it.CoverKey != "" {
-		return s.mediaURL(it.CoverKey, it.Visibility)
-	}
-	return it.CoverRemoteURL
-}
-
-// thumbURL resolves the small grid image, preferring the thumb variant.
-func (s *Server) thumbURL(it store.Item) string {
-	switch {
-	case it.ThumbKey != "":
-		return s.mediaURL(it.ThumbKey, it.Visibility)
-	case it.CoverKey != "":
-		return s.mediaURL(it.CoverKey, it.Visibility)
-	default:
-		return it.CoverRemoteURL
-	}
-}
-
 // AltText is a meaningful image alt: the title, else the filename, else the kind
 // (so untitled items aren't announced as empty by screen readers).
 func (v itemView) AltText() string {
-	switch {
-	case strings.TrimSpace(v.Title) != "":
-		return v.Title
-	case strings.TrimSpace(v.FileName) != "":
-		return v.FileName
-	case v.Kind != "":
-		return v.Kind
-	default:
-		return "untitled"
+	for _, c := range []string{v.Title, v.FileName, v.Kind} {
+		if c = strings.TrimSpace(c); c != "" {
+			return c
+		}
 	}
+	return "untitled"
 }
 
 func (s *Server) view(it store.Item) itemView {
 	v := itemView{
 		Item:      it,
-		CoverURL:  s.coverURL(it),
-		ThumbURL:  s.thumbURL(it),
-		DetailURL: "/item/" + strconv.FormatInt(it.ID, 10),
+		CoverURL:  s.mediaURL(it.CoverKey, it.Visibility),
+		ThumbURL:  s.mediaURL(firstNonEmpty(it.ThumbKey, it.CoverKey), it.Visibility),
+		SmallURL:  s.mediaURL(it.SmallKey, it.Visibility),
+		FileURL:   s.mediaURL(it.FileKey, it.Visibility),
+		DetailURL: itemPath(it.ID),
 	}
-	if it.FileKey != "" {
-		v.FileURL = s.mediaURL(it.FileKey, it.Visibility)
-	}
-	if it.SmallKey != "" {
-		v.SmallURL = s.mediaURL(it.SmallKey, it.Visibility)
+	// Remote-hosted covers (not yet processed) fall back to their original URL.
+	if v.CoverURL == "" {
+		v.CoverURL, v.ThumbURL = it.CoverRemoteURL, it.CoverRemoteURL
 	}
 	return v
 }
 
-func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	pd := s.page(r, "SEARCH")
-	pd.SearchQuery = q
-	if q != "" {
-		items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 200})
-		if err != nil {
-			s.serverError(w, r, err)
-			return
-		}
-		for _, it := range items {
-			pd.Items = append(pd.Items, s.view(it))
+func (s *Server) views(items []store.Item) []itemView {
+	out := make([]itemView, len(items))
+	for i, it := range items {
+		out[i] = s.view(it)
+	}
+	return out
+}
+
+func itemPath(id int64) string { return "/item/" + strconv.FormatInt(id, 10) }
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
 		}
 	}
-	s.render(w, "search.html", pd)
+	return ""
+}
+
+// parseCursor reads a "created:id" keyset cursor (unix seconds + item id).
+func parseCursor(r *http.Request) (created, id int64) {
+	a, b, _ := strings.Cut(r.URL.Query().Get("cursor"), ":")
+	created, _ = strconv.ParseInt(a, 10, 64)
+	id, _ = strconv.ParseInt(b, 10, 64)
+	return created, id
+}
+
+// writeCards renders items as board-card HTML fragments (infinite scroll, live search).
+func (s *Server) writeCards(w http.ResponseWriter, items []store.Item) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	for _, it := range items {
+		if err := s.tmpl.ExecuteTemplate(w, "card", s.view(it)); err != nil {
+			log.Printf("render card: %v", err)
+			return
+		}
+	}
+}
+
+func (s *Server) search(r *http.Request, limit int) ([]store.Item, error) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		return nil, nil
+	}
+	return s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: limit})
+}
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	items, err := s.search(r, 200)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	pd := s.page(r, "SEARCH")
+	pd.SearchQuery = strings.TrimSpace(r.URL.Query().Get("q"))
+	pd.Items = s.views(items)
+	s.render(w, http.StatusOK, "search.html", pd)
 }
 
 // handleAPISearch returns compact JSON results for the live search overlay.
 // Public results for anonymous visitors; private included when logged in.
 func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	results := []map[string]any{}
-	if q != "" {
-		if items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 12}); err == nil {
-			for _, it := range items {
-				v := s.view(it)
-				results = append(results, map[string]any{
-					"title":    it.Title,
-					"url":      v.DetailURL,
-					"thumb":    v.ThumbURL,
-					"kind":     it.Kind,
-					"category": it.CategoryName,
-					"date":     strings.ToUpper(it.CreatedAt.Format("Jan 02")),
-				})
-			}
-		}
+	items, err := s.search(r, 12)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "search failed")
+		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	results := []map[string]any{}
+	for _, v := range s.views(items) {
+		results = append(results, map[string]any{
+			"title":    v.Title,
+			"url":      v.DetailURL,
+			"thumb":    v.ThumbURL,
+			"kind":     v.Kind,
+			"category": v.CategoryName,
+			"date":     strings.ToUpper(v.CreatedAt.Format("Jan 02")),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // handleSearchCards renders search results as board-card HTML (live results on
 // the /search page).
 func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if q == "" {
-		return
-	}
-	items, err := s.store.SearchItems(r.Context(), store.SearchFilter{Query: q, IncludePrivate: s.isAdmin(r), Limit: 48})
+	items, err := s.search(r, boardPage)
 	if err != nil {
-		s.serverError(w, r, err)
+		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
-	for _, it := range items {
-		if err := s.tmpl.ExecuteTemplate(w, "card", s.view(it)); err != nil {
-			log.Printf("render card: %v", err)
-		}
-	}
-}
-
-// boardColumns is the configured masonry column count for wide screens. Only 3
-// (default) or 4 are allowed; narrower viewports step down via CSS regardless.
-func (s *Server) boardColumns(ctx context.Context) int {
-	if v, _ := s.store.GetSetting(ctx, "board_columns"); v == "4" {
-		return 4
-	}
-	return 3
+	s.writeCards(w, items)
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Limit: boardPage}
-	slug := r.PathValue("slug")
-	switch {
-	case strings.HasPrefix(r.URL.Path, "/category/"):
-		f.CategorySlug = slug
-	case strings.HasPrefix(r.URL.Path, "/tag/"):
-		f.TagSlug = slug
+	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Cards: true, Limit: boardPage}
+	if strings.HasPrefix(r.URL.Path, "/category/") {
+		f.CategorySlug = r.PathValue("slug")
+	} else {
+		f.TagSlug = r.PathValue("slug")
 	}
-
-	items, err := s.store.ListItemCards(r.Context(), f)
+	items, err := s.store.ListItems(r.Context(), f)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-
 	pd := s.page(r, s.siteTitle())
-	pd.ActiveCat = f.CategorySlug
-	pd.ActiveTag = f.TagSlug
-	pd.BoardColumns = s.cachedBoardColumns(r.Context())
-	for i, it := range items {
-		v := s.view(it)
-		// The masonry distributes cards round-robin, so the first row is the first
-		// N items — load those eagerly at high priority to help the board's LCP.
-		if i < pd.BoardColumns {
-			v.Eager = true
-		}
-		pd.Items = append(pd.Items, v)
+	pd.ActiveCat, pd.ActiveTag = f.CategorySlug, f.TagSlug
+	pd.Items = s.views(items)
+	// The masonry distributes cards round-robin, so the first row is the first
+	// N items — load those eagerly at high priority to help the board's LCP.
+	for i := 0; i < len(pd.Items) && i < pd.BoardColumns; i++ {
+		pd.Items[i].Eager = true
 	}
 	if n := len(items); n > 0 {
-		last := items[n-1]
-		pd.CursorCreated = last.CreatedAt.Unix()
-		pd.CursorID = last.ID
+		pd.CursorCreated, pd.CursorID = items[n-1].CreatedAt.Unix(), items[n-1].ID
 	}
 	pd.BoardDone = len(items) < boardPage
 	if st, err := s.store.PublicStats(r.Context()); err == nil {
 		pd.Stats = &st
 	}
-	s.render(w, "index.html", pd)
+	s.render(w, http.StatusOK, "index.html", pd)
 }
 
 // handleBoardMore returns the next page of board cards as an HTML fragment
-// (used by infinite scroll). Cursor is "created:id" (unix seconds + item id).
+// (used by infinite scroll).
 func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
 	f := store.ItemFilter{
 		IncludePrivate: s.isAdmin(r),
+		Cards:          true,
 		Limit:          boardPage,
 		CategorySlug:   r.URL.Query().Get("cat"),
 		TagSlug:        r.URL.Query().Get("tag"),
 	}
-	if cur := r.URL.Query().Get("cursor"); cur != "" {
-		if parts := strings.SplitN(cur, ":", 2); len(parts) == 2 {
-			f.BeforeCreated, _ = strconv.ParseInt(parts[0], 10, 64)
-			f.BeforeID, _ = strconv.ParseInt(parts[1], 10, 64)
-		}
-	}
-	items, err := s.store.ListItemCards(r.Context(), f)
+	f.BeforeCreated, f.BeforeID = parseCursor(r)
+	items, err := s.store.ListItems(r.Context(), f)
 	if err != nil {
-		s.serverError(w, r, err)
+		http.Error(w, "could not load items", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	for _, it := range items {
-		if err := s.tmpl.ExecuteTemplate(w, "card", s.view(it)); err != nil {
-			log.Printf("render card: %v", err)
-		}
-	}
+	s.writeCards(w, items)
 }
 
 // handleAPIStats returns public archive vitals (for the colophon / easter eggs).
 func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 	st, _ := s.store.PublicStats(r.Context())
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"count":  st.Count,
 		"oldest": st.Oldest.Format("Jan 2, 2006"),
 		"newest": st.Newest.Format("Jan 2, 2006"),
@@ -346,7 +320,8 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	it, err := s.store.GetItem(r.Context(), id, s.isAdmin(r))
+	isAdmin := s.isAdmin(r)
+	it, err := s.store.GetItem(r.Context(), id, isAdmin)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -355,94 +330,65 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	pd := s.page(r, it.Title)
+	pd := s.page(r, firstNonEmpty(it.Title, s.siteTitle()))
 	v := s.view(*it)
 	pd.Item = &v
 
 	// SEO / Open Graph for this item
 	pd.Meta.Type = "article"
 	pd.Meta.URL = s.absURL(v.DetailURL)
-	if d := itemDescription(*it); d != "" {
-		pd.Meta.Description = d
-	}
-	pd.Meta.Image = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
+	pd.Meta.Description = firstNonEmpty(itemDescription(*it), pd.Meta.Description)
+	pd.Meta.Image = s.absURL(v.DetailURL + "/og.jpg")
 	pd.JSONLD = s.itemJSONLD(v, pd.Nonce)
-	if it.Title == "" {
-		pd.PageTitle = s.siteTitle()
-	}
 
 	// Prev/next within the board ordering (newer / older)
-	prevID, nextID, _ := s.store.GetAdjacent(r.Context(), *it, s.isAdmin(r))
-	if prevID != 0 {
-		pd.PrevURL = "/item/" + strconv.FormatInt(prevID, 10)
-	}
-	if nextID != 0 {
-		pd.NextURL = "/item/" + strconv.FormatInt(nextID, 10)
-	}
-
-	// Related items
-	if rel, err := s.store.GetRelated(r.Context(), *it, 6, s.isAdmin(r)); err == nil {
-		for _, ri := range rel {
-			pd.Related = append(pd.Related, s.view(ri))
+	if prevID, nextID, err := s.store.GetAdjacent(r.Context(), *it, isAdmin); err == nil {
+		if prevID != 0 {
+			pd.PrevURL = itemPath(prevID)
+		}
+		if nextID != 0 {
+			pd.NextURL = itemPath(nextID)
 		}
 	}
-
-	s.render(w, "detail.html", pd)
+	if rel, err := s.store.GetRelated(r.Context(), *it, 6, isAdmin); err == nil {
+		pd.Related = s.views(rel)
+	}
+	s.render(w, http.StatusOK, "detail.html", pd)
 }
 
 func itemDescription(it store.Item) string {
-	for _, c := range []string{it.Note, it.LinkDescription, it.Title} {
-		if c = strings.TrimSpace(c); c != "" {
-			return c
-		}
-	}
-	return ""
+	return strings.TrimSpace(firstNonEmpty(strings.TrimSpace(it.Note), strings.TrimSpace(it.LinkDescription), it.Title))
 }
 
-// itemJSONLD builds schema.org structured data for a detail page. Go's json
-// encoder escapes <, > and & as \u00xx, so the result is safe to drop straight
-// into a <script type="application/ld+json"> block.
+// itemJSONLD builds schema.org structured data for a detail page, as a whole
+// <script> element: json.Marshal escapes <, > and & as \u00xx so there's no
+// </script> breakout, and emitting it in HTML context avoids html/template
+// applying JS-string escaping inside the tag.
 func (s *Server) itemJSONLD(v itemView, nonce string) template.HTML {
 	it := v.Item
-	name := it.Title
-	if name == "" {
-		name = s.siteTitle()
-	}
+	name := firstNonEmpty(it.Title, s.siteTitle())
 	ld := map[string]any{
-		"@context": "https://schema.org",
-		"name":     name,
-		"url":      s.absURL(v.DetailURL),
+		"@context":      "https://schema.org",
+		"name":          name,
+		"url":           s.absURL(v.DetailURL),
+		"datePublished": it.CreatedAt.Format(time.RFC3339),
+		"dateModified":  it.UpdatedAt.Format(time.RFC3339),
 	}
 	if d := itemDescription(it); d != "" {
 		ld["description"] = d
 	}
-	if !it.CreatedAt.IsZero() {
-		ld["datePublished"] = it.CreatedAt.Format(time.RFC3339)
-	}
-	if !it.UpdatedAt.IsZero() {
-		ld["dateModified"] = it.UpdatedAt.Format(time.RFC3339)
-	}
 	switch {
-	case it.Kind == "embed" && strings.HasPrefix(it.FileMime, "video/"):
+	case isVideoItem(it) && v.FileURL != "":
 		ld["@type"] = "VideoObject"
-		if v.FileURL != "" {
-			ld["contentUrl"] = s.absURL(v.FileURL)
-		}
-		ld["thumbnailUrl"] = s.absURL("/item/" + strconv.FormatInt(it.ID, 10) + "/og.jpg")
-		if !it.CreatedAt.IsZero() {
-			ld["uploadDate"] = it.CreatedAt.Format(time.RFC3339)
-		}
+		ld["contentUrl"] = s.absURL(v.FileURL)
+		ld["thumbnailUrl"] = s.absURL(v.DetailURL + "/og.jpg")
+		ld["uploadDate"] = ld["datePublished"]
 	case v.CoverURL != "":
 		ld["@type"] = "ImageObject"
 		ld["contentUrl"] = s.absURL(v.CoverURL)
-		if v.ThumbURL != "" {
-			ld["thumbnailUrl"] = s.absURL(v.ThumbURL)
-		}
-		if it.Width > 0 {
-			ld["width"] = it.Width
-		}
-		if it.Height > 0 {
-			ld["height"] = it.Height
+		ld["thumbnailUrl"] = s.absURL(v.ThumbURL)
+		if it.Width > 0 && it.Height > 0 {
+			ld["width"], ld["height"] = it.Width, it.Height
 		}
 	default:
 		ld["@type"] = "Article"
@@ -452,22 +398,14 @@ func (s *Server) itemJSONLD(v itemView, nonce string) template.HTML {
 	if err != nil {
 		return ""
 	}
-	// Build the whole <script> element here and emit it in HTML context: json.Marshal
-	// escapes <, > and & as \u00xx so there's no </script> breakout, and this avoids
-	// html/template applying JS-string escaping to the value inside a <script> tag.
-	attr := ""
-	if nonce != "" {
-		attr = ` nonce="` + nonce + `"`
-	}
-	return template.HTML(`<script type="application/ld+json"` + attr + `>` + string(b) + `</script>`) //nolint:gosec
+	return template.HTML(`<script type="application/ld+json" nonce="` + nonce + `">` + string(b) + `</script>`) //nolint:gosec
 }
 
-func (s *Server) render(w http.ResponseWriter, name string, data any) {
-	// Render fully into a buffer first, then write once with a Content-Length. This
-	// sends the page as one atomic body instead of a chunked/streamed one — buffered
-	// delivery does not trigger the Firefox theme flash, where a streamed document can
-	// paint a frame before the (server-declared) theme settles. It also means a
-	// template error can't emit a half-written 200.
+// render executes a page template fully into a buffer, then writes it once with
+// a Content-Length. Buffered delivery doesn't trigger the Firefox theme flash
+// (a streamed document can paint a frame before the server-declared theme
+// settles), and a template error can't emit a half-written page.
+func (s *Server) render(w http.ResponseWriter, status int, name string, data any) {
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("render %s: %v", name, err)
@@ -477,22 +415,25 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache") // HTML is dynamic; always revalidate
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *Server) serverError(w http.ResponseWriter, r *http.Request, err error) {
 	log.Printf("server error: %v (%s %s)", err, r.Method, r.URL.Path)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusInternalServerError)
-	if terr := s.tmpl.ExecuteTemplate(w, "500.html", s.page(r, "ERROR")); terr != nil {
-		log.Printf("render 500: %v", terr)
-	}
+	s.render(w, http.StatusInternalServerError, "500.html", s.page(r, "ERROR"))
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusNotFound)
-	if err := s.tmpl.ExecuteTemplate(w, "404.html", s.page(r, "NOT FOUND")); err != nil {
-		log.Printf("render 404: %v", err)
-	}
+	s.render(w, http.StatusNotFound, "404.html", s.page(r, "NOT FOUND"))
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

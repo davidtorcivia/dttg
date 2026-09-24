@@ -16,7 +16,7 @@
       </form>
     </div>
 
-    {{if .Error}}<div class="flash flash-error" role="status">{{.Error}}</div>{{end}}
+    {{template "flash" .}}
 
     <form method="POST" action="/feed/sources" class="remote-follow-form">{{template "csrf" .}}
       <label>Follow JSON Feed
@@ -86,9 +86,7 @@
           {{- if .ContentText}}<p class="remote-card-text">{{.ContentText}}</p>{{end}}
           <div class="remote-card-meta">
             <span>{{shortDate .PublishedAt}}</span>
-            {{- if and .URL .ExternalURL}}
-            <a href="{{.ExternalURL}}" rel="noopener noreferrer">external</a>
-            {{- else if .ExternalURL}}
+            {{- if .ExternalURL}}
             <a href="{{.ExternalURL}}" rel="noopener noreferrer">external</a>
             {{- end}}
           </div>

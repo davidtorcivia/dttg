@@ -60,9 +60,8 @@ Data lives in `./data` (SQLite + media), which is git-ignored.
 | `dnttg migrate` | Apply migrations and exit. |
 | `dnttg ready` | Exit 0 when the DB is reachable (Docker healthcheck). |
 | `dnttg seed` | Download + refine demo content if the archive is empty. |
-| `dnttg reconcile` | Push local-only refined variants up to R2 (backfill). |
+| `dnttg reconcile` | Move every blob to the tier its visibility calls for: public → R2, private → local only (alias: `localize-private-media`). Admin visibility edits do this per item automatically. |
 | `dnttg backfill-variants` | Generate the ~400px small variant for older images. |
-| `dnttg localize-private-media` | Pull private media off R2 onto local disk only. |
 | `dnttg backup` | Snapshot the DB to the private R2 backups bucket (+ prune old). |
 | `dnttg reset-content` | Delete all items/media/tags/categories (keeps password + tokens). |
 | `dnttg set-password` | Set password from stdin (prompt if TTY). Arg form works but is less safe. |

@@ -46,7 +46,7 @@
     </div>
 
     <div class="danger">
-      <form method="POST" action="/admin/maintenance/cleanup" onsubmit="return confirm('Permanently delete {{len .OrphanFiles}} orphan files, {{len .BrokenItems}} broken items, and {{len .StrayRows}} stray rows? This cannot be undone.')">{{template "csrf" $}}
+      <form method="POST" action="/admin/maintenance/cleanup" data-confirm="Permanently delete {{len .OrphanFiles}} orphan files, {{len .BrokenItems}} broken items, and {{len .StrayRows}} stray rows? This cannot be undone.">{{template "csrf" $}}
         <button type="submit">Delete everything above</button>
       </form>
       <p style="margin-top:1.25rem"><a href="/admin/settings" class="back-btn">&larr; Back to settings</a></p>

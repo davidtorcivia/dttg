@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	nethtml "golang.org/x/net/html"
 )
@@ -39,15 +40,39 @@ func (s *Server) validCSRF(r *http.Request) bool {
 }
 
 // csrf rejects state-changing POSTs that lack a valid session-bound token (the
-// session cookie is SameSite=Lax, so this is defense-in-depth).
+// session cookie is SameSite=Lax, so this is defense-in-depth). The body is
+// capped first: reading csrf_token parses the whole (possibly multipart) form.
 func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && !s.validCSRF(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1)
+		// ParseMultipartForm falls back to ParseForm for urlencoded bodies.
+		if err := r.ParseMultipartForm(maxUpload); isMaxBytesError(err) {
+			http.Error(w, "upload too large (max 30 MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if !s.validCSRF(r) {
 			http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
 			return
 		}
 		next(w, r)
 	}
+}
+
+type adminKey struct{}
+
+// adminOnce memoizes the session lookup for one request.
+type adminOnce struct {
+	once sync.Once
+	ok   bool
+}
+
+// withAdmin lets handlers and templates ask isAdmin repeatedly while the
+// sessions table is queried at most once per request (and never for requests,
+// like static assets, that don't ask).
+func (s *Server) withAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), adminKey{}, &adminOnce{})))
+	})
 }
 
 type nonceKey struct{}
@@ -112,7 +137,7 @@ func contentSecurityPolicy(nonce string) string {
 
 // recoverPanic turns a panic in any handler into a 500 instead of crashing the
 // whole process.
-func (s *Server) recoverPanic(next http.Handler) http.Handler {
+func recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {

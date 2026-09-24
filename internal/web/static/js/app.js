@@ -61,6 +61,7 @@
     if (!grid.__order) grid.__order = Array.prototype.slice.call(grid.querySelectorAll('.card'));
     var cards = grid.__order;
     grid.textContent = '';
+    grid.classList.add('grid--cols'); // upgrade from the block fallback to flex columns
     var cols = [], heights = [];
     for (var i = 0; i < n; i++) {
       var c = document.createElement('div');
@@ -123,6 +124,14 @@
       eagerIO.observe(img);
     }
   }
+  // Hydrate a card rendered after load (infinite scroll, live search).
+  function hydrateCard(card) {
+    var img = card.querySelector('.card-img-container img');
+    if (img) { blurUp(img); observeEager(img); }
+    var vt = card.querySelector('[data-vt]');
+    if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
+    card.classList.add('visible');
+  }
   // Focus trap for modals: keep Tab within the container while open; returns a
   // detach fn. Pair with saving/restoring document.activeElement around open/close.
   function focusableEls(el) {
@@ -179,7 +188,6 @@
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
-    grid.classList.add('grid--cols'); // upgrade from the block fallback to flex columns
     var relayout = function () { layoutMasonry(grid); };
     layoutMasonry(grid, true);
     // Re-evaluate the column count whenever a breakpoint is actually crossed, and
@@ -364,14 +372,7 @@
     if (!form || !input || !grid) return;
     var lastGoodHTML = grid.innerHTML;
     var lastGoodMeta = meta ? meta.textContent : '';
-    var revive = function () {
-      grid.querySelectorAll('.card').forEach(function (card) {
-        var img = card.querySelector('.card-img-container img');
-        if (img) { blurUp(img); observeEager(img); }
-        var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
-        card.classList.add('visible');
-      });
-    };
+    var revive = function () { grid.querySelectorAll('.card').forEach(hydrateCard); };
     var skeleton = function () {
       grid.className = 'grid';
       grid.textContent = '';
@@ -386,6 +387,7 @@
       if (!q) {
         grid.className = 'grid';
         grid.textContent = '';
+        grid.__order = null; // so a later relayout can't resurrect the old results
         lastGoodHTML = '';
         lastGoodMeta = '';
         if (meta) meta.textContent = '';
@@ -572,6 +574,12 @@
       setTimeout(function () { bm.textContent = '+ Save to the glass'; }, 1800);
     });
   })();
+
+  // ---- confirm destructive forms (data-confirm; inline handlers are CSP-blocked) ----
+  document.addEventListener('submit', function (e) {
+    var msg = e.target.getAttribute && e.target.getAttribute('data-confirm');
+    if (msg && !window.confirm(msg)) e.preventDefault();
+  });
 
   // ---- themed file input filename ----
   document.querySelectorAll('input[type=file]').forEach(function (inp) {
@@ -875,7 +883,8 @@
     requestAnimationFrame(refresh);
     window.addEventListener('load', refresh);
     window.addEventListener('pageshow', function (e) { if (e.persisted) refresh(); });
-    window.addEventListener('resize', refresh);
+    var rt;
+    window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(refresh, 150); });
 
     if (btn) {
       btn.addEventListener('click', function () {
@@ -926,7 +935,7 @@
     if (sheet) sheet.addEventListener('click', function (e) { if (e.target === sheet) closeSheet(); });
   })();
 
-  // ---- board keyboard nav (j/k/arrows + enter) ----
+  // ---- board keyboard nav (j/k + enter) ----
   (function () {
     var grid = document.getElementById('grid');
     if (!grid) return;
@@ -942,8 +951,9 @@
     };
     document.addEventListener('keydown', function (e) {
       if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || anyModalOpen()) return;
-      if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') { e.preventDefault(); focus(idx + 1); }
-      else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') { e.preventDefault(); focus(idx - 1); }
+      // j/k only: arrow keys keep scrolling the page natively.
+      if (e.key === 'j' || e.key === 'J') { e.preventDefault(); focus(idx + 1); }
+      else if (e.key === 'k' || e.key === 'K') { e.preventDefault(); focus(idx - 1); }
       else if (e.key === 'Enter' && idx >= 0) { var l = cards()[idx]; if (l) l.click(); }
     });
   })();
@@ -997,27 +1007,14 @@
         var added = tmp.querySelectorAll('.card');
         var lastCard = null;
         added.forEach(function (card) {
-          var img = card.querySelector('.card-img-container img');
-          if (img) { blurUp(img); observeEager(img); }
-          var vt = card.querySelector('[data-vt]'); if (vt) { try { vt.style.viewTransitionName = vt.getAttribute('data-vt'); } catch (e) {} }
-          card.classList.add('visible');
+          hydrateCard(card);
           masonryAppend(grid, card);
           lastCard = card;
         });
-        // Advance cursor only after cards are appended (from last card's data-id / time if present).
+        // Advance the keyset cursor to the last appended card.
         if (lastCard) {
-          var idAttr = lastCard.getAttribute('data-id') || (lastCard.querySelector('[data-id]') && lastCard.querySelector('[data-id]').getAttribute('data-id'));
-          var createdAttr = lastCard.getAttribute('data-created');
-          if (idAttr) cursorId = idAttr;
-          if (createdAttr) cursorCreated = createdAttr;
-          // Fallback: parse detail URL /item/N
-          if (!idAttr) {
-            var a = lastCard.tagName === 'A' ? lastCard : lastCard.querySelector('a[href^="/item/"]');
-            if (a) {
-              var m = (a.getAttribute('href') || '').match(/\/item\/(\d+)/);
-              if (m) cursorId = m[1];
-            }
-          }
+          cursorId = lastCard.getAttribute('data-id') || cursorId;
+          cursorCreated = lastCard.getAttribute('data-created') || cursorCreated;
         }
         if (added.length < page) { done = true; markEnd(); }
         clearRetry();

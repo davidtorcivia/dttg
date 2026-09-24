@@ -38,16 +38,16 @@ type sitemapIndex struct {
 // the item count exceeds one chunk it becomes a <sitemapindex> pointing at child
 // sitemaps (/sitemap.xml?p=N), each a urlset of up to sitemapChunk items.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
-	if s.feedNotModified(w, r) {
+	if s.feedCached(w, r) {
 		return
 	}
-	total, err := s.store.CountItems(r.Context(), false)
+	st, err := s.store.PublicStats(r.Context())
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
+	total := st.Count
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	s.setFeedCacheHeaders(w, r)
 
 	page := r.URL.Query().Get("p")
 	switch {
@@ -78,13 +78,13 @@ func (s *Server) writeURLSet(w http.ResponseWriter, r *http.Request, chunk int, 
 				add("/category/"+c.Slug, "")
 			}
 		}
-		if tags, err := s.store.ListTags(r.Context()); err == nil {
+		if tags, err := s.store.ListTags(r.Context(), false); err == nil {
 			for _, t := range tags {
 				add("/tag/"+t.Slug, "")
 			}
 		}
 	}
-	f := store.ItemFilter{} // Limit 0 => all
+	f := store.ItemFilter{Cards: true} // Limit 0 => all
 	if chunk >= 1 {
 		f.Limit = sitemapChunk
 		f.Offset = (chunk - 1) * sitemapChunk
@@ -95,15 +95,7 @@ func (s *Server) writeURLSet(w http.ResponseWriter, r *http.Request, chunk int, 
 		return
 	}
 	for _, it := range items {
-		lm := it.UpdatedAt
-		if lm.IsZero() {
-			lm = it.CreatedAt
-		}
-		mod := ""
-		if !lm.IsZero() {
-			mod = lm.UTC().Format("2006-01-02")
-		}
-		add("/item/"+strconv.FormatInt(it.ID, 10), mod)
+		add(itemPath(it.ID), it.UpdatedAt.Format("2006-01-02"))
 	}
 	writeXML(w, set)
 }
@@ -124,7 +116,7 @@ func writeXML(w http.ResponseWriter, v any) {
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		log.Printf("sitemap encode: %v", err)
+		log.Printf("xml encode: %v", err)
 	}
 	_, _ = w.Write([]byte("\n"))
 }

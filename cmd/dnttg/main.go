@@ -6,9 +6,10 @@
 //	dnttg migrate                    apply migrations and exit
 //	dnttg ready                      exit 0 if the DB is reachable
 //	dnttg seed                       insert demo content if the archive is empty
-//	dnttg reconcile                  push local-only refined variants up to R2 (backfill)
+//	dnttg reconcile                  move blobs to the tier their visibility calls for
+//	                                 (public → R2, private → local only)
+//	dnttg localize-private-media     alias of reconcile
 //	dnttg backfill-variants          generate the ~400px small variant for older images
-//	dnttg localize-private-media     pull private media off R2 onto local disk only
 //	dnttg backup                     snapshot the DB to the R2 backups bucket (+ prune old)
 //	dnttg reset-content              delete all items/media/tags/categories (keeps password + tokens)
 //	dnttg set-password [pw]          set/replace the admin login password (stdin if omitted)
@@ -19,7 +20,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -29,7 +29,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -47,96 +46,55 @@ import (
 func main() {
 	log.SetFlags(log.Ltime)
 	cfg := config.Load()
+	ctx := context.Background()
 
 	cmd := "serve"
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]
+	}
+	// run opens the store for a one-shot subcommand and exits non-zero on error.
+	run := func(fn func(st *store.Store) error) {
+		st := mustStore(cfg)
+		defer st.Close()
+		if err := fn(st); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	switch cmd {
 	case "serve":
 		serve(cfg)
 	case "migrate":
-		st := mustStore(cfg)
-		defer st.Close()
-		fmt.Println("migrations applied")
+		run(func(*store.Store) error { fmt.Println("migrations applied"); return nil })
 	case "ready":
-		st := mustStore(cfg)
-		defer st.Close()
-		if err := st.Ping(context.Background()); err != nil {
-			log.Fatal(err)
-		}
+		run(func(st *store.Store) error { return st.Ping(ctx) })
 	case "seed":
-		st := mustStore(cfg)
-		defer st.Close()
-		ms := mustMedia(cfg)
-		if err := seed(context.Background(), st, ingest.New(st, ms)); err != nil {
-			log.Fatal(err)
-		}
-	case "reconcile":
-		st := mustStore(cfg)
-		defer st.Close()
-		if err := reconcile(context.Background(), st, mustMedia(cfg)); err != nil {
-			log.Fatal(err)
-		}
+		run(func(st *store.Store) error { return seed(ctx, st, ingest.New(st, mustMedia(cfg))) })
+	case "reconcile", "localize-private-media":
+		run(func(st *store.Store) error { return reconcile(ctx, st, mustMedia(cfg)) })
 	case "backfill-variants":
-		st := mustStore(cfg)
-		defer st.Close()
-		if err := backfillVariants(context.Background(), st, mustMedia(cfg)); err != nil {
-			log.Fatal(err)
-		}
-	case "localize-private-media":
-		st := mustStore(cfg)
-		defer st.Close()
-		if err := localizePrivateMedia(context.Background(), st, mustMedia(cfg)); err != nil {
-			log.Fatal(err)
-		}
+		run(func(st *store.Store) error { return backfillVariants(ctx, st, mustMedia(cfg)) })
 	case "backup":
 		if !cfg.BackupsEnabled() {
 			log.Fatal("backups not configured (set R2_* and R2_BACKUP_BUCKET)")
 		}
-		st := mustStore(cfg)
-		defer st.Close()
-		bp, err := newBackuper(cfg, st)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := bp.RunOnce(context.Background()); err != nil {
-			log.Fatal(err)
-		}
+		run(func(st *store.Store) error {
+			bp, err := newBackuper(cfg, st)
+			if err == nil {
+				err = bp.RunOnce(ctx)
+			}
+			return err
+		})
 		fmt.Println("backup complete")
 	case "reset-content":
-		st := mustStore(cfg)
-		defer st.Close()
-		if err := st.ResetContent(context.Background()); err != nil {
-			log.Fatal(err)
-		}
+		run(func(st *store.Store) error { return st.ResetContent(ctx) })
 		fmt.Println("archive content cleared (password + tokens kept)")
 	case "set-password":
-		pw, fromArg, err := readPasswordArg()
-		if err != nil {
-			log.Fatal(err)
-		}
-		if pw == "" {
-			log.Fatal("password must not be empty")
-		}
-		if fromArg {
-			log.Printf("warning: password on argv is less safe (shell history / process list); prefer stdin or a prompt")
-		}
-		st := mustStore(cfg)
-		defer st.Close()
-		hash, err := web.HashPassword(pw)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := st.SetSetting(context.Background(), "password_hash", hash); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("password updated")
+		run(func(st *store.Store) error { return setPassword(ctx, st) })
 	case "token":
-		runToken(cfg, os.Args[2:])
+		run(func(st *store.Store) error { return runToken(ctx, st, os.Args[2:]) })
 	default:
-		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|localize-private-media|backup|reset-content|set-password|token)", cmd)
+		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|backup|reset-content|set-password|token)", cmd)
 	}
 }
 
@@ -158,7 +116,7 @@ func mustMedia(cfg config.Config) media.Store {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if cfg.R2AccessKey == "" || cfg.R2SecretKey == "" || cfg.R2Bucket == "" {
+	if !cfg.R2Enabled() {
 		return local
 	}
 	r2, err := media.NewR2Store(media.R2Config{
@@ -191,7 +149,6 @@ func newBackuper(cfg config.Config, st *store.Store) (*backup.Backuper, error) {
 func serve(cfg config.Config) {
 	st := mustStore(cfg)
 	defer st.Close()
-
 	ms := mustMedia(cfg)
 
 	// Cancelled on SIGINT/SIGTERM — drives graceful shutdown + background loops.
@@ -214,38 +171,7 @@ func serve(cfg config.Config) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// Periodically purge expired sessions and pending share blobs.
-	go func() {
-		t := time.NewTicker(6 * time.Hour)
-		defer t.Stop()
-		for {
-			if n, err := st.PurgeExpiredSessions(context.Background()); err != nil {
-				log.Printf("session purge: %v", err)
-			} else if n > 0 {
-				log.Printf("purged %d expired sessions", n)
-			}
-			if expired, err := st.ListExpiredPendingShares(context.Background()); err != nil {
-				log.Printf("pending share list: %v", err)
-			} else {
-				for _, p := range expired {
-					if p.FileKey != "" {
-						_ = os.Remove(filepath.Join(cfg.DataDir, "pending", p.FileKey))
-					}
-				}
-				if n, err := st.PurgeExpiredPendingShares(context.Background()); err != nil {
-					log.Printf("pending share purge: %v", err)
-				} else if n > 0 {
-					log.Printf("purged %d expired pending shares", n)
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	}()
+	srv.Start(ctx)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
@@ -256,7 +182,6 @@ func serve(cfg config.Config) {
 		// uploads can be slow. ReadHeaderTimeout (Slowloris) + the per-handler 30MB
 		// cap + the fronting reverse proxy cover the slow-client risk.
 	}
-
 	go func() {
 		log.Printf("DO NOT TOUCH THE GLASS — listening on %s (public %s)", cfg.Addr, cfg.BaseURL)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -273,73 +198,72 @@ func serve(cfg config.Config) {
 	}
 }
 
-
-// readPasswordArg returns the password for set-password.
-// Priority: argv form (less safe), else stdin — interactive terminal prompts without echo.
-func readPasswordArg() (pw string, fromArg bool, err error) {
-	if len(os.Args) >= 3 {
-		return os.Args[2], true, nil
-	}
-	fd := int(os.Stdin.Fd())
-	if term.IsTerminal(fd) {
+// setPassword sets the admin password. Priority: argv (less safe: shell history
+// / process list), else stdin — an interactive terminal prompts without echo.
+func setPassword(ctx context.Context, st *store.Store) error {
+	var pw string
+	switch fd := int(os.Stdin.Fd()); {
+	case len(os.Args) >= 3:
+		pw = os.Args[2]
+		log.Printf("warning: password on argv is less safe (shell history / process list); prefer stdin or a prompt")
+	case term.IsTerminal(fd):
 		fmt.Fprint(os.Stderr, "New password: ")
 		b, err := term.ReadPassword(fd)
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
-			return "", false, err
+			return err
 		}
-		return string(b), false, nil
+		pw = string(b)
+	default:
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		pw = strings.TrimRight(string(b), "\r\n")
 	}
-	b, err := io.ReadAll(os.Stdin)
+	if pw == "" {
+		return errors.New("password must not be empty")
+	}
+	hash, err := web.HashPassword(pw)
 	if err != nil {
-		return "", false, err
+		return err
 	}
-	return strings.TrimRight(string(b), "\r\n"), false, nil
+	if err := st.SetSetting(ctx, "password_hash", hash); err != nil {
+		return err
+	}
+	fmt.Println("password updated")
+	return nil
 }
 
-func runToken(cfg config.Config, args []string) {
-	sub := "mint"
-	if len(args) > 0 {
-		switch args[0] {
-		case "list", "revoke", "mint":
-			sub = args[0]
-			args = args[1:]
-		default:
-			// bare `token [name]` keeps mint behavior
-			sub = "mint"
-		}
+func runToken(ctx context.Context, st *store.Store, args []string) error {
+	sub := "mint" // bare `token [name]` mints
+	if len(args) > 0 && (args[0] == "list" || args[0] == "revoke" || args[0] == "mint") {
+		sub, args = args[0], args[1:]
 	}
-	st := mustStore(cfg)
-	defer st.Close()
-	ctx := context.Background()
-
 	switch sub {
 	case "list":
 		toks, err := st.ListTokens(ctx)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		if len(toks) == 0 {
 			fmt.Println("no API tokens")
-			return
 		}
 		for _, t := range toks {
 			last := "never"
 			if t.LastUsedAt != nil {
 				last = t.LastUsedAt.Format(time.RFC3339)
 			}
-			fmt.Printf("%d\t%s\tcreated=%s\tlast_used=%s\n",
-				t.ID, t.Name, t.CreatedAt.Format(time.RFC3339), last)
+			fmt.Printf("%d\t%s\tcreated=%s\tlast_used=%s\n", t.ID, t.Name, t.CreatedAt.Format(time.RFC3339), last)
 		}
 	case "revoke":
 		if len(args) < 1 {
-			log.Fatal("usage: dnttg token revoke <id|name>")
+			return errors.New("usage: dnttg token revoke <id|name>")
 		}
-		if err := st.RevokeToken(ctx, args[0]); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				log.Fatalf("no token matching %q", args[0])
-			}
-			log.Fatal(err)
+		if err := st.RevokeToken(ctx, args[0]); errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("no token matching %q", args[0])
+		} else if err != nil {
+			return err
 		}
 		fmt.Printf("revoked token %q\n", args[0])
 	case "mint":
@@ -349,77 +273,9 @@ func runToken(cfg config.Config, args []string) {
 		}
 		tok := web.NewToken()
 		if _, err := st.CreateToken(ctx, name, web.HashToken(tok)); err != nil {
-			log.Fatal(err)
+			return err
 		}
 		fmt.Printf("API token (%s) — store it now, it will not be shown again:\n\n  %s\n\n", name, tok)
-	}
-}
-
-// localizePrivateMedia copies private-item blobs off R2 onto local disk and
-// clears on_r2 so private media is never served from a public CDN URL.
-func localizePrivateMedia(ctx context.Context, st *store.Store, ms media.Store) error {
-	rows, err := st.ListPrivateMediaOnR2(ctx)
-	if err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		fmt.Println("no private media on R2")
-		return nil
-	}
-
-	// Must have R2 so we can delete private objects after localizing.
-	mirror, ok := ms.(*media.MirrorStore)
-	if !ok || !mirror.HasR2() {
-		return fmt.Errorf("R2 not configured — set R2_* env vars before localize-private-media")
-	}
-	type privatePutter interface {
-		PutPrivate(ctx context.Context, key, contentType string, r io.Reader, size int64) error
-	}
-	pp, ok := ms.(privatePutter)
-	if !ok {
-		return fmt.Errorf("media store does not support PutPrivate")
-	}
-
-	var done, failed int
-	for _, m := range rows {
-		if err := localizeOne(ctx, st, ms, pp, mirror, m); err != nil {
-			log.Printf("localize %s (id=%d): %v — leaving row unchanged", m.StorageKey, m.ID, err)
-			failed++
-			continue
-		}
-		done++
-		fmt.Printf("localized %s\n", m.StorageKey)
-	}
-	fmt.Printf("localize-private-media: %d ok, %d failed, %d total\n", done, failed, len(rows))
-	return nil
-}
-
-func localizeOne(ctx context.Context, st *store.Store, ms media.Store, pp interface {
-	PutPrivate(ctx context.Context, key, contentType string, r io.Reader, size int64) error
-}, mirror *media.MirrorStore, m store.Media) error {
-	rc, err := ms.Open(m.StorageKey)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
-	}
-	data, err := io.ReadAll(rc)
-	_ = rc.Close()
-	if err != nil {
-		return fmt.Errorf("read: %w", err)
-	}
-	ct := m.ContentType
-	if ct == "" {
-		ct = "application/octet-stream"
-	}
-	if err := pp.PutPrivate(ctx, m.StorageKey, ct, bytes.NewReader(data), int64(len(data))); err != nil {
-		return fmt.Errorf("put local: %w", err)
-	}
-	if mirror != nil {
-		if err := mirror.DeleteR2(ctx, m.StorageKey); err != nil {
-			return fmt.Errorf("delete r2: %w", err)
-		}
-	}
-	if err := st.MarkMediaLocalOnly(ctx, m.ID); err != nil {
-		return fmt.Errorf("mark local: %w", err)
 	}
 	return nil
 }

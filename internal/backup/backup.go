@@ -8,13 +8,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 
+	"donottouchtheglass/internal/media"
 	"donottouchtheglass/internal/store"
 )
 
@@ -41,24 +40,12 @@ type Backuper struct {
 }
 
 func New(st *store.Store, dataDir string, cfg Config) (*Backuper, error) {
-	if cfg.AccessKey == "" || cfg.SecretKey == "" || cfg.Bucket == "" {
-		return nil, fmt.Errorf("backup: missing creds/bucket")
-	}
-	endpoint := cfg.Endpoint
-	if endpoint == "" {
-		if cfg.AccountID == "" {
-			return nil, fmt.Errorf("backup: need R2_ACCOUNT_ID or R2_ENDPOINT")
-		}
-		endpoint = cfg.AccountID + ".r2.cloudflarestorage.com"
-	}
-	endpoint = strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://"), "/")
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: true,
-		Region: "auto",
+	client, err := media.NewR2Client(media.R2Config{
+		AccountID: cfg.AccountID, Bucket: cfg.Bucket, AccessKey: cfg.AccessKey,
+		SecretKey: cfg.SecretKey, Endpoint: cfg.Endpoint,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("backup: %w", err)
 	}
 	if cfg.Retention <= 0 {
 		cfg.Retention = 14 * 24 * time.Hour

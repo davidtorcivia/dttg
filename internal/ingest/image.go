@@ -67,7 +67,7 @@ func ProcessImage(raw []byte) (*ProcessedImage, error) {
 		return nil, err
 	}
 	pi.Placeholder = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(phJPEG)
-	pi.DominantColor = averageColor(img)
+	pi.DominantColor = averageColor(small) // same mean colour, a fraction of the work
 	return pi, nil
 }
 
