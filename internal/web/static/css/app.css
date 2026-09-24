@@ -107,10 +107,6 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .info-value { color:var(--text); font-weight:500; }
 .info-value a { text-decoration:none; border-bottom:1px solid var(--line); transition:border-color .3s; }
 .info-value a:hover { border-color:var(--text); }
-.tags { display:flex; flex-wrap:wrap; gap:.7rem; }
-.tags a { font-size:.62rem; color:var(--faint); text-decoration:none; text-transform:uppercase; letter-spacing:.08em; transition:color .3s; }
-.tags a::before { content:"#"; opacity:.5; }
-.tags a:hover { color:var(--text); }
 .note-content { font-size:1.1rem; line-height:1.8; color:var(--text); font-weight:300; }
 .quote { font-size:1.15rem; line-height:1.7; font-weight:300; font-style:italic; color:var(--muted); margin:1.75rem 0 0; padding-left:1.4rem; border-left:2px solid var(--line); }
 .quote::before { content:"\201C"; color:var(--faint); }

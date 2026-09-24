@@ -35,22 +35,10 @@ func (s *Server) loadSite(ctx context.Context) {
 	})
 }
 
-// siteID returns the current identity, falling back to raw config if loadSite
-// hasn't run yet (e.g. very early in startup or in lightweight tests).
-func (s *Server) siteID() siteIdentity {
-	if id := s.site.Load(); id != nil {
-		return *id
-	}
-	return siteIdentity{
-		Title:       s.cfg.SiteTitle,
-		Tagline:     s.cfg.SiteTagline,
-		BaseURL:     strings.TrimRight(s.cfg.BaseURL, "/"),
-		Description: s.cfg.SiteDescription,
-	}
-}
+// siteID returns the current identity (published by loadSite in New).
+func (s *Server) siteID() siteIdentity { return *s.site.Load() }
 
 func (s *Server) siteTitle() string   { return s.siteID().Title }
-func (s *Server) siteTagline() string { return s.siteID().Tagline }
 func (s *Server) siteBaseURL() string { return s.siteID().BaseURL }
 
 // metaDescription composes the default page/feed description: "<title> — <tagline>".

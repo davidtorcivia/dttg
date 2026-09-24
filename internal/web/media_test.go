@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -27,10 +26,10 @@ func TestPrivateMediaGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create private item: %v", err)
 	}
-	if err := s.media.Put(ctx, privKey, "image/jpeg", int64(len(payload)), strings.NewReader(payload)); err != nil {
+	if err := s.media.Put(ctx, privKey, "image/jpeg", []byte(payload), true); err != nil {
 		t.Fatalf("put private blob: %v", err)
 	}
-	if _, err := s.store.AddMedia(ctx, store.Media{
+	if err := s.store.UpsertMedia(ctx, store.Media{
 		ItemID: privID, Variant: "full", StorageKey: privKey,
 		ContentType: "image/jpeg", Bytes: int64(len(payload)), OnLocal: true,
 	}); err != nil {
@@ -44,10 +43,10 @@ func TestPrivateMediaGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create public item: %v", err)
 	}
-	if err := s.media.Put(ctx, pubKey, "image/jpeg", int64(len(payload)), strings.NewReader(payload)); err != nil {
+	if err := s.media.Put(ctx, pubKey, "image/jpeg", []byte(payload), false); err != nil {
 		t.Fatalf("put public blob: %v", err)
 	}
-	if _, err := s.store.AddMedia(ctx, store.Media{
+	if err := s.store.UpsertMedia(ctx, store.Media{
 		ItemID: pubID, Variant: "full", StorageKey: pubKey,
 		ContentType: "image/jpeg", Bytes: int64(len(payload)), OnLocal: true,
 	}); err != nil {

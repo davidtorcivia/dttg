@@ -108,14 +108,8 @@ func newTokenBucket(rate float64, burst int) *tokenBucket {
 	}
 }
 
-// Allow consumes one token for key when available. Thread-safe.
-func (tb *tokenBucket) Allow(key string) bool {
-	ok, _ := tb.allow(key)
-	return ok
-}
-
-// allow is like Allow but also returns how long to wait for the next token when
-// denied (for Retry-After).
+// allow consumes one token for key when available, else reports how long to
+// wait for the next one (for Retry-After). Thread-safe.
 func (tb *tokenBucket) allow(key string) (bool, time.Duration) {
 	now := time.Now()
 	tb.mu.Lock()

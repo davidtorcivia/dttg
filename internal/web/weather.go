@@ -12,23 +12,11 @@ import (
 // weatherCache holds the latest NYC temperature, refreshed server-side so the
 // header works regardless of the visitor's network. open-meteo, no API key.
 type weatherCache struct {
-	mu      sync.RWMutex
-	tempF   *int
-	updated time.Time
+	mu    sync.RWMutex
+	tempF *int
 }
 
 const openMeteoURL = "https://api.open-meteo.com/v1/forecast?latitude=40.7128&longitude=-74.0060&current_weather=true&temperature_unit=fahrenheit"
-
-func (s *Server) startWeather() {
-	go func() {
-		s.refreshWeather()
-		t := time.NewTicker(15 * time.Minute)
-		defer t.Stop()
-		for range t.C {
-			s.refreshWeather()
-		}
-	}()
-}
 
 func (s *Server) refreshWeather() {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -56,7 +44,6 @@ func (s *Server) refreshWeather() {
 	t := int(math.Round(data.CurrentWeather.Temperature))
 	s.weather.mu.Lock()
 	s.weather.tempF = &t
-	s.weather.updated = time.Now()
 	s.weather.mu.Unlock()
 }
 

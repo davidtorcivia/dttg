@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"fmt"
 	"hash/fnv"
@@ -112,28 +113,25 @@ func (s *Server) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data []byte
-	if s.ogCache != nil {
-		data, _ = s.ogCache.get(id, updated)
-	}
-	if data == nil {
-		var cover image.Image
-		if it.CoverKey != "" {
-			if rc, e := s.media.Open(it.CoverKey); e == nil {
-				cover, _ = imaging.Decode(rc, imaging.AutoOrientation(true))
-				_ = rc.Close()
-			}
-		}
-		var buf bytes.Buffer
-		if err := imaging.Encode(&buf, s.renderOGCard(*it, cover), imaging.JPEG, imaging.JPEGQuality(88)); err != nil {
+	data, ok := s.ogCache.get(id, updated)
+	if !ok {
+		var err error
+		if data, err = encodeOG(s.renderOGCard(*it, s.ogDecode(r.Context(), it.CoverKey))); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
-		data = buf.Bytes()
-		if s.ogCache != nil {
-			s.ogCache.put(id, updated, data)
-		}
+		s.ogCache.put(id, updated, data)
 	}
+	writeOG(w, etag, data)
+}
+
+func encodeOG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	err := imaging.Encode(&buf, img, imaging.JPEG, imaging.JPEGQuality(88))
+	return buf.Bytes(), err
+}
+
+func writeOG(w http.ResponseWriter, etag string, data []byte) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.Header().Set("ETag", etag)
@@ -147,14 +145,7 @@ func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {
 	marginX := 72
 	site := strings.ToUpper(s.siteTitle())
 	meta := ogMeta(it)
-	title := it.Title
-	if title == "" {
-		if it.FileName != "" {
-			title = it.FileName
-		} else {
-			title = "Untitled"
-		}
-	}
+	title := firstNonEmpty(it.Title, it.FileName, "Untitled")
 
 	if cover != nil {
 		filled := imaging.AdjustContrast(imaging.Fill(cover, ogW, ogH, imaging.Center, imaging.Lanczos), 8)
@@ -309,7 +300,7 @@ func (s *Server) handleSiteOGImage(w http.ResponseWriter, r *http.Request) {
 	}
 	picked := make([]store.Item, 0, ogSiteTake)
 	for _, it := range items {
-		if ogTileKey(it) != "" {
+		if it.CoverKey != "" {
 			picked = append(picked, it)
 			if len(picked) == ogSiteTake {
 				break
@@ -332,38 +323,33 @@ func (s *Server) handleSiteOGImage(w http.ResponseWriter, r *http.Request) {
 	if !hit {
 		imgs := make([]image.Image, 0, len(picked))
 		for i, it := range picked {
-			key := ogTileKey(it)
+			key := firstNonEmpty(it.SmallKey, it.ThumbKey, it.CoverKey)
 			if i == 0 {
-				key = ogFeaturedKey(it) // the featured panel wants the larger variant
+				key = it.CoverKey // the featured panel wants the larger variant
 			}
-			if img := s.ogDecode(key); img != nil {
+			if img := s.ogDecode(r.Context(), key); img != nil {
 				imgs = append(imgs, img)
 			}
 		}
-		var buf bytes.Buffer
-		if err := imaging.Encode(&buf, s.renderSiteOGCard(s.siteTitle(), s.siteHost(), imgs), imaging.JPEG, imaging.JPEGQuality(88)); err != nil {
+		var err error
+		if data, err = encodeOG(s.renderSiteOGCard(s.siteTitle(), s.siteHost(), imgs)); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
-		data = buf.Bytes()
 		s.siteOG.mu.Lock()
 		s.siteOG.fp, s.siteOG.data = fp, data
 		s.siteOG.mu.Unlock()
 	}
-
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Header().Set("ETag", etag)
-	_, _ = w.Write(data)
+	writeOG(w, etag, data)
 }
 
 // ogDecode opens a media key and decodes it, returning nil on any failure (a
 // missing tile just leaves that cell empty rather than failing the whole card).
-func (s *Server) ogDecode(key string) image.Image {
+func (s *Server) ogDecode(ctx context.Context, key string) image.Image {
 	if key == "" {
 		return nil
 	}
-	rc, err := s.media.Open(key)
+	rc, err := s.media.Open(ctx, key)
 	if err != nil {
 		return nil
 	}
@@ -373,25 +359,6 @@ func (s *Server) ogDecode(key string) image.Image {
 		return nil
 	}
 	return img
-}
-
-// ogTileKey / ogFeaturedKey pick the best available variant for grid vs featured.
-func ogTileKey(it store.Item) string {
-	for _, k := range []string{it.SmallKey, it.ThumbKey, it.CoverKey} {
-		if k != "" {
-			return k
-		}
-	}
-	return ""
-}
-
-func ogFeaturedKey(it store.Item) string {
-	for _, k := range []string{it.CoverKey, it.SmallKey, it.ThumbKey} {
-		if k != "" {
-			return k
-		}
-	}
-	return ""
 }
 
 func siteOGFingerprint(title, host string, items []store.Item) string {

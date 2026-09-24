@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -158,14 +157,6 @@ func parseRemoteJSONFeed(feedURL string, body []byte, fetchedAt time.Time) (remo
 			published = t.UTC()
 		}
 
-		rawJSON := ""
-		var obj any
-		if err := json.Unmarshal(ir, &obj); err == nil {
-			if b, err := json.Marshal(obj); err == nil {
-				rawJSON = string(b)
-			}
-		}
-
 		out.Items = append(out.Items, store.RemoteFeedItem{
 			RemoteID:       remoteID,
 			URL:            cleanFeedURL(feedURL, it.URL),
@@ -179,7 +170,7 @@ func parseRemoteJSONFeed(feedURL string, body []byte, fetchedAt time.Time) (remo
 			AuthorURL:      authorURL,
 			PublishedAt:    published,
 			FetchedAt:      fetchedAt,
-			RawJSON:        rawJSON,
+			RawJSON:        string(ir),
 		})
 	}
 	return out, nil
@@ -193,10 +184,6 @@ func (s *Server) syncRemoteFeed(ctx context.Context, feedID int64) error {
 	if feed == nil {
 		return fmt.Errorf("remote feed %d not found", feedID)
 	}
-	if s.ingest == nil {
-		return fmt.Errorf("ingest service unavailable")
-	}
-
 	now := time.Now().UTC()
 	res, err := s.ingest.Fetch(ctx, feed.FeedURL, ingest.FetchOptions{
 		Accept:       "application/feed+json, application/json;q=0.9",
@@ -204,55 +191,31 @@ func (s *Server) syncRemoteFeed(ctx context.Context, feedID int64) error {
 		LastModified: feed.LastModified,
 		MaxBytes:     remoteFeedMaxBytes,
 	})
+	if err == nil && res.NotModified {
+		return s.store.MarkRemoteFeedChecked(ctx, feedID, now)
+	}
+	var parsed remoteFeedParsed
+	if err == nil {
+		parsed, err = parseRemoteJSONFeed(feed.FeedURL, res.Body, now)
+	}
+	if err == nil {
+		upd := parsed.Update
+		upd.ETag, upd.LastModified, upd.LastFetchedAt, upd.LastSuccessAt = res.ETag, res.LastModified, now, now
+		_, err = s.store.SaveRemoteFeedFetch(ctx, feedID, upd, parsed.Items)
+	}
 	if err != nil {
 		_ = s.store.SaveRemoteFeedError(ctx, feedID, now, err.Error())
-		return err
 	}
-	if res.NotModified {
-		if err := s.store.MarkRemoteFeedChecked(ctx, feedID, now); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	parsed, err := parseRemoteJSONFeed(feed.FeedURL, res.Body, now)
-	if err != nil {
-		_ = s.store.SaveRemoteFeedError(ctx, feedID, now, err.Error())
-		return err
-	}
-	parsed.Update.ETag = res.ETag
-	parsed.Update.LastModified = res.LastModified
-	parsed.Update.LastFetchedAt = now
-	parsed.Update.LastSuccessAt = now
-	parsed.Update.LastError = ""
-	if _, err := s.store.SaveRemoteFeedFetch(ctx, feedID, parsed.Update, parsed.Items); err != nil {
-		_ = s.store.SaveRemoteFeedError(ctx, feedID, now, err.Error())
-		return err
-	}
-	return nil
-}
-
-func (s *Server) syncAllRemoteFeeds(ctx context.Context) {
-	feeds, err := s.store.ListRemoteFeeds(ctx, true)
-	if err != nil {
-		log.Printf("list remote feeds: %v", err)
-		return
-	}
-	for _, f := range feeds {
-		if err := s.syncRemoteFeed(ctx, f.ID); err != nil {
-			log.Printf("sync remote feed %d (%s): %v", f.ID, f.FeedURL, err)
-		}
-	}
+	return err
 }
 
 func (s *Server) handleRemoteFeedPage(w http.ResponseWriter, r *http.Request) {
+	s.renderFeedPage(w, r, http.StatusOK, "")
+}
+
+func (s *Server) renderFeedPage(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	f := store.RemoteFeedItemFilter{Limit: remoteFeedPage, ActiveOnly: true}
-	if cur := r.URL.Query().Get("cursor"); cur != "" {
-		if parts := strings.SplitN(cur, ":", 2); len(parts) == 2 {
-			f.BeforePublished, _ = strconv.ParseInt(parts[0], 10, 64)
-			f.BeforeID, _ = strconv.ParseInt(parts[1], 10, 64)
-		}
-	}
+	f.BeforePublished, f.BeforeID = parseCursor(r)
 	items, err := s.store.ListRemoteFeedItems(r.Context(), f)
 	if err != nil {
 		s.serverError(w, r, err)
@@ -264,31 +227,23 @@ func (s *Server) handleRemoteFeedPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pd := s.page(r, "FEED")
-	pd.RemoteFeeds = feeds
-	pd.RemoteItems = items
+	pd.RemoteFeeds, pd.RemoteItems, pd.Error = feeds, items, msg
 	if n := len(items); n > 0 {
-		last := items[n-1]
-		pd.CursorCreated = last.PublishedAt.Unix()
-		pd.CursorID = last.ID
+		pd.CursorCreated, pd.CursorID = items[n-1].PublishedAt.Unix(), items[n-1].ID
 	}
 	pd.BoardDone = len(items) < remoteFeedPage
-	s.render(w, "feed.html", pd)
+	s.render(w, status, "feed.html", pd)
 }
 
 func (s *Server) handleRemoteFeedAddSource(w http.ResponseWriter, r *http.Request) {
 	feedURL := strings.TrimSpace(r.FormValue("feed_url"))
+	if feedURL = cleanFeedURL(feedURL, feedURL); feedURL == "" {
+		s.renderFeedPage(w, r, http.StatusBadRequest, "Feed URL must be an absolute http(s) URL")
+		return
+	}
 	feed, _, err := s.store.AddRemoteFeed(r.Context(), feedURL)
 	if err != nil {
-		feeds, _ := s.store.ListRemoteFeeds(r.Context(), false)
-		items, _ := s.store.ListRemoteFeedItems(r.Context(), store.RemoteFeedItemFilter{
-			Limit: remoteFeedPage, ActiveOnly: true,
-		})
-		pd := s.page(r, "FEED")
-		pd.RemoteFeeds = feeds
-		pd.RemoteItems = items
-		pd.Error = err.Error()
-		pd.BoardDone = true
-		s.render(w, "feed.html", pd)
+		s.renderFeedPage(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	// Best-effort immediate sync; errors surface via last_error on the source.
@@ -297,18 +252,15 @@ func (s *Server) handleRemoteFeedAddSource(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleRemoteFeedFetchSource(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		s.notFound(w, r)
-		return
+	if id, ok := pathID(r); ok {
+		_ = s.syncRemoteFeed(r.Context(), id)
 	}
-	_ = s.syncRemoteFeed(r.Context(), id)
 	http.Redirect(w, r, "/feed", http.StatusSeeOther)
 }
 
 func (s *Server) handleRemoteFeedUnfollowSource(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
+	id, ok := pathID(r)
+	if !ok {
 		s.notFound(w, r)
 		return
 	}
@@ -320,24 +272,32 @@ func (s *Server) handleRemoteFeedUnfollowSource(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleRemoteFeedSyncAll(w http.ResponseWriter, r *http.Request) {
-	s.syncAllRemoteFeeds(r.Context())
-	http.Redirect(w, r, "/feed", http.StatusSeeOther)
-}
-
-func (s *Server) handleRemoteFeedRepost(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		s.notFound(w, r)
-		return
-	}
-	// Confirm the remote item exists before CreateRepost so missing rows 404.
-	remote, err := s.store.GetRemoteFeedItem(r.Context(), id)
+	feeds, err := s.store.ListRemoteFeeds(r.Context(), true)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	if remote == nil {
+	for _, f := range feeds {
+		if err := s.syncRemoteFeed(r.Context(), f.ID); err != nil {
+			log.Printf("sync remote feed %d (%s): %v", f.ID, f.FeedURL, err)
+		}
+	}
+	http.Redirect(w, r, "/feed", http.StatusSeeOther)
+}
+
+func (s *Server) handleRemoteFeedRepost(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
 		s.notFound(w, r)
+		return
+	}
+	// Confirm the remote item exists before CreateRepost so missing rows 404.
+	if remote, err := s.store.GetRemoteFeedItem(r.Context(), id); err != nil || remote == nil {
+		if err != nil {
+			s.serverError(w, r, err)
+		} else {
+			s.notFound(w, r)
+		}
 		return
 	}
 	localID, _, err := s.store.CreateRepost(r.Context(), id)
@@ -345,8 +305,6 @@ func (s *Server) handleRemoteFeedRepost(w http.ResponseWriter, r *http.Request) 
 		s.serverError(w, r, err)
 		return
 	}
-	if localID > 0 {
-		s.invalidateSiteCache()
-	}
-	http.Redirect(w, r, "/item/"+strconv.FormatInt(localID, 10), http.StatusSeeOther)
+	s.invalidateSiteCache()
+	http.Redirect(w, r, itemPath(localID), http.StatusSeeOther)
 }

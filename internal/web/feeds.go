@@ -20,19 +20,11 @@ func isVideoItem(it store.Item) bool {
 }
 
 func itemTitleOr(it store.Item) string {
-	switch {
-	case it.Title != "":
-		return it.Title
-	case it.FileName != "":
-		return it.FileName
-	case it.SourceURL != "":
-		return it.SourceURL
-	}
-	return "Untitled"
+	return firstNonEmpty(it.Title, it.FileName, it.SourceURL, "Untitled")
 }
 
 func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
-	if s.feedNotModified(w, r) {
+	if s.feedCached(w, r) {
 		return
 	}
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
@@ -53,30 +45,19 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 		DateModified  string         `json:"date_modified,omitempty"`
 		Attachments   []jfAttachment `json:"attachments,omitempty"`
 	}
-	var arr []jf
+	arr := make([]jf, 0, len(items)) // the spec requires an array, never null
 	for _, it := range items {
 		v := s.view(it)
 		item := jf{
 			ID:            s.absURL(v.DetailURL),
 			URL:           s.absURL(v.DetailURL),
+			ExternalURL:   it.SourceURL,
 			Title:         itemTitleOr(it),
 			ContentText:   it.Note,
+			Summary:       firstNonEmpty(it.LinkDescription, it.Note, it.Title),
 			Image:         s.absURL(v.CoverURL),
 			DatePublished: it.CreatedAt.Format(time.RFC3339),
-		}
-		if it.SourceURL != "" {
-			item.ExternalURL = it.SourceURL
-		}
-		switch {
-		case it.LinkDescription != "":
-			item.Summary = it.LinkDescription
-		case it.Note != "":
-			item.Summary = it.Note
-		case it.Title != "":
-			item.Summary = it.Title
-		}
-		if !it.UpdatedAt.IsZero() {
-			item.DateModified = it.UpdatedAt.Format(time.RFC3339)
+			DateModified:  it.UpdatedAt.Format(time.RFC3339),
 		}
 		if isVideoItem(it) && v.FileURL != "" {
 			item.Attachments = []jfAttachment{{
@@ -88,7 +69,6 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 		arr = append(arr, item)
 	}
 	w.Header().Set("Content-Type", "application/feed+json; charset=utf-8")
-	s.setFeedCacheHeaders(w, r)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version":       "https://jsonfeed.org/version/1.1",
 		"title":         s.siteTitle(),
@@ -102,7 +82,7 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
-	if s.feedNotModified(w, r) {
+	if s.feedCached(w, r) {
 		return
 	}
 	items, _ := s.store.ListItems(r.Context(), store.ItemFilter{Limit: feedLimit})
@@ -158,41 +138,24 @@ func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 		doc.Channel.Items = append(doc.Channel.Items, ri)
 	}
 	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
-	s.setFeedCacheHeaders(w, r)
-	_, _ = w.Write([]byte(xml.Header))
-	enc := xml.NewEncoder(w)
-	enc.Indent("", "  ")
-	_ = enc.Encode(doc)
+	writeXML(w, doc)
 }
 
-// feedETag is derived from public item count, max(updated_at), and site identity
-// so settings changes (title/base_url) invalidate caches.
-func (s *Server) feedETag(r *http.Request) string {
-	n, maxU, err := s.store.PublicRevision(r.Context())
+// feedCached sets the ETag/Cache-Control for a public feed or sitemap and
+// answers 304 when the client already has the current revision. The ETag
+// covers public item count, max(updated_at), and site identity, so settings
+// changes (title/base_url) invalidate caches too.
+func (s *Server) feedCached(w http.ResponseWriter, r *http.Request) bool {
+	st, err := s.store.PublicStats(r.Context())
 	if err != nil {
-		return ""
-	}
-	id := s.siteID()
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%s|%s", n, maxU, id.Title, id.BaseURL, id.Description)))
-	return `W/"` + hex.EncodeToString(sum[:8]) + `"`
-}
-
-func (s *Server) setFeedCacheHeaders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	if et := s.feedETag(r); et != "" {
-		w.Header().Set("ETag", et)
-	}
-}
-
-// feedNotModified writes 304 when If-None-Match matches the current revision.
-func (s *Server) feedNotModified(w http.ResponseWriter, r *http.Request) bool {
-	et := s.feedETag(r)
-	if et == "" {
 		return false
 	}
-	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == et {
-		w.Header().Set("ETag", et)
-		w.Header().Set("Cache-Control", "public, max-age=300")
+	id := s.siteID()
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%s|%s", st.Count, st.Updated, id.Title, id.BaseURL, id.Description)))
+	et := `W/"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("ETag", et)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	if r.Header.Get("If-None-Match") == et {
 		w.WriteHeader(http.StatusNotModified)
 		return true
 	}

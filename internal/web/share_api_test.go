@@ -77,7 +77,7 @@ func TestShareUnauthPendingSurvivesLogin(t *testing.T) {
 }
 
 func TestAPICreateTokenAuth(t *testing.T) {
-	s := newTestServerWithIngest(t)
+	s := newTestServer(t)
 	h := s.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/items", strings.NewReader(`{"kind":"text","note":"n"}`))
@@ -119,13 +119,12 @@ func TestAPICreateTokenAuth(t *testing.T) {
 }
 
 func TestAPITaxonomyAndCORS(t *testing.T) {
-	s := newTestServerWithIngest(t)
+	s := newTestServer(t)
 	plain := "tax-token"
 	if _, err := s.store.CreateToken(context.Background(), "tax", HashToken(plain)); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = s.store.GetOrCreateCategory(context.Background(), "Texture")
-	_, _ = s.store.GetOrCreateTag(context.Background(), "film")
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/taxonomy", nil)
 	req.Header.Set("Origin", "moz-extension://abc")
@@ -151,7 +150,7 @@ func TestAPITaxonomyAndCORS(t *testing.T) {
 }
 
 func TestShareMultipartFileAsAdmin(t *testing.T) {
-	s := newTestServerWithIngest(t)
+	s := newTestServer(t)
 	sid := "share-admin"
 	if err := s.store.CreateSession(context.Background(), HashSession(sid), time.Hour); err != nil {
 		t.Fatal(err)

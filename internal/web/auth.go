@@ -71,10 +71,7 @@ func HashToken(tok string) string {
 
 // HashSession stores session IDs as their SHA-256, same as API tokens. The
 // browser cookie still carries the raw random ID; only the hash is persisted.
-func HashSession(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:])
-}
+func HashSession(id string) string { return HashToken(id) }
 
 func newSessionID() string {
 	b := make([]byte, 24)
@@ -82,7 +79,17 @@ func newSessionID() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// isAdmin reports whether the request carries a valid session, memoized per
+// request by withAdmin when present.
 func (s *Server) isAdmin(r *http.Request) bool {
+	if a, ok := r.Context().Value(adminKey{}).(*adminOnce); ok {
+		a.once.Do(func() { a.ok = s.lookupAdmin(r) })
+		return a.ok
+	}
+	return s.lookupAdmin(r)
+}
+
+func (s *Server) lookupAdmin(r *http.Request) bool {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return false
@@ -91,7 +98,8 @@ func (s *Server) isAdmin(r *http.Request) bool {
 	return ok
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {
+// setSessionCookie sets the session cookie; maxAge < 0 clears it.
+func (s *Server) setSessionCookie(w http.ResponseWriter, id string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    id,
@@ -99,20 +107,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {
 		HttpOnly: true,
 		Secure:   s.cfg.HTTPSBase(),
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(sessionTTL),
-		MaxAge:   int(sessionTTL.Seconds()),
-	})
-}
-
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.cfg.HTTPSBase(),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
+		MaxAge:   maxAge,
 	})
 }
 
@@ -123,35 +118,29 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 	}
 	pd := s.page(r, "LOGIN")
 	pd.Next = r.URL.Query().Get("next")
-	s.render(w, "login.html", pd)
+	s.render(w, http.StatusOK, "login.html", pd)
 }
 
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
-	next := r.FormValue("next")
+	pd := s.page(r, "LOGIN")
+	pd.Next = r.FormValue("next")
 	if blocked, retry := s.loginRL.blocked(ip); blocked {
-		pd := s.page(r, "LOGIN")
-		pd.Next = next
 		pd.Error = "Too many attempts. Try again later."
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		w.WriteHeader(http.StatusTooManyRequests)
-		s.render(w, "login.html", pd)
+		s.render(w, http.StatusTooManyRequests, "login.html", pd)
 		return
 	}
-	pw := r.FormValue("password")
 	hash, _ := s.store.GetSetting(r.Context(), "password_hash")
-	pd := s.page(r, "LOGIN")
-	pd.Next = next
 	switch {
 	case hash == "":
-		pd.Error = "No password configured. Run: dnttg set-password <password>"
-		s.render(w, "login.html", pd)
-	case !VerifyPassword(pw, hash):
+		pd.Error = "No password configured. Run: dnttg set-password"
+		s.render(w, http.StatusServiceUnavailable, "login.html", pd)
+	case !VerifyPassword(r.FormValue("password"), hash):
 		s.loginRL.fail(ip)
 		time.Sleep(400 * time.Millisecond) // throttle brute force
 		pd.Error = "Incorrect password."
-		w.WriteHeader(http.StatusUnauthorized)
-		s.render(w, "login.html", pd)
+		s.render(w, http.StatusUnauthorized, "login.html", pd)
 	default:
 		s.loginRL.reset(ip)
 		sid := newSessionID()
@@ -159,15 +148,15 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, r, err)
 			return
 		}
-		s.setSessionCookie(w, sid)
-		http.Redirect(w, r, safeNext(next), http.StatusSeeOther)
+		s.setSessionCookie(w, sid, int(sessionTTL.Seconds()))
+		http.Redirect(w, r, safeNext(pd.Next), http.StatusSeeOther)
 	}
 }
 
-// safeNext returns dest when it is a same-origin relative path (starts with "/"
-// and not "//"); otherwise "/".
+// safeNext returns dest when it is a same-origin relative path; otherwise "/".
+// Browsers treat "\" like "/", so "/\evil.com" would be protocol-relative.
 func safeNext(dest string) string {
-	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
+	if !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") || strings.ContainsAny(dest, "\\\r\n") {
 		return "/"
 	}
 	return dest
@@ -177,6 +166,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		_ = s.store.DeleteSession(r.Context(), HashSession(c.Value))
 	}
-	s.clearSessionCookie(w)
+	s.setSessionCookie(w, "", -1)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

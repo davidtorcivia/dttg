@@ -130,7 +130,7 @@ func TestSearch(t *testing.T) {
 		t.Errorf("punctuation query errored: %v", err)
 	}
 	// update keeps the FTS index in sync
-	if err := st.UpdateItem(ctx, id1, "Renamed moonrise", "", "", 0, "public"); err != nil {
+	if err := st.UpdateItem(ctx, id1, ItemEdit{Title: "Renamed moonrise", Visibility: "public"}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if res, _ := st.SearchItems(ctx, SearchFilter{Query: "exposure", IncludePrivate: false}); len(res) != 0 {
@@ -336,5 +336,73 @@ func TestResetContentClearsRemoteCacheKeepsSources(t *testing.T) {
 	}
 	if n, _ := st.CountItems(ctx, true); n != 0 {
 		t.Fatalf("items after reset = %d", n)
+	}
+}
+
+func TestTaxonomyAndSharesAndLike(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	cat, err := st.GetOrCreateCategory(ctx, "Secret Stuff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := st.GetOrCreateCategory(ctx, "secret stuff"); again != cat {
+		t.Fatalf("GetOrCreateCategory not idempotent: %d vs %d", again, cat)
+	}
+	if _, err := st.CreateItemWithMediaAndTags(ctx, Item{Kind: "text", Title: "100% hidden", Visibility: "private", CategoryID: cat},
+		nil, []string{"hush", "hush", "!!!"}); err != nil {
+		t.Fatal(err)
+	}
+	if cats, _ := st.ListCategories(ctx, false); len(cats) != 0 {
+		t.Errorf("private-only category leaked publicly: %+v", cats)
+	}
+	if cats, _ := st.ListCategories(ctx, true); len(cats) != 1 || cats[0].Count != 1 {
+		t.Errorf("admin categories = %+v", cats)
+	}
+	if tags, _ := st.ListTags(ctx, false); len(tags) != 0 {
+		t.Errorf("private-only tag leaked publicly: %+v", tags)
+	}
+	if tags, _ := st.ListTags(ctx, true); len(tags) != 1 || tags[0].Slug != "hush" {
+		t.Errorf("admin tags = %+v", tags)
+	}
+	// Punctuation-only queries take the LIKE fallback, where metacharacters are
+	// literal: "%" matches the "100%" title, "_" matches nothing.
+	if res, _ := st.SearchItems(ctx, SearchFilter{Query: "%", IncludePrivate: true}); len(res) != 1 {
+		t.Errorf("search %% = %d results", len(res))
+	}
+	if res, _ := st.SearchItems(ctx, SearchFilter{Query: "_", IncludePrivate: true}); len(res) != 0 {
+		t.Errorf("search _ = %d results, want 0", len(res))
+	}
+
+	if err := st.CreatePendingShare(ctx, PendingShare{ID: "p1", URL: "https://x"}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := st.TakePendingShare(ctx, "p1"); err != nil || p == nil || p.URL != "https://x" {
+		t.Fatalf("take = %+v, %v", p, err)
+	}
+	if p, _ := st.TakePendingShare(ctx, "p1"); p != nil {
+		t.Fatal("pending share taken twice")
+	}
+	_ = st.CreatePendingShare(ctx, PendingShare{ID: "old", FileKey: "old.png", ExpiresAt: time.Now().Add(-time.Minute)})
+	if keys, err := st.PurgeExpiredPendingShares(ctx); err != nil || len(keys) != 1 || keys[0] != "old.png" {
+		t.Fatalf("purge = %v, %v", keys, err)
+	}
+
+	f, created, _ := st.AddRemoteFeed(ctx, "https://peer.example/feed.json")
+	_ = st.SetRemoteFeedActive(ctx, f.ID, false)
+	if f2, created2, err := st.AddRemoteFeed(ctx, "https://peer.example/feed.json"); err != nil || !created || created2 || !f2.Active || f2.ID != f.ID {
+		t.Fatalf("re-follow: created=%v created2=%v feed=%+v err=%v", created, created2, f2, err)
+	}
+}
+
+// Slugs are persisted and in public URLs; these rules must not drift.
+func TestSlugifyStable(t *testing.T) {
+	for in, want := range map[string]string{
+		"Hello World": "hello-world", " a/b.c_d ": "a-b-c-d", "C++": "c",
+		"Émile": "Émile", "日本 写真": "日本-写真", "--x--": "x", "!!!": "",
+	} {
+		if got := Slugify(in); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

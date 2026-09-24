@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"donottouchtheglass/internal/config"
+	"donottouchtheglass/internal/ingest"
 	"donottouchtheglass/internal/media"
 	"donottouchtheglass/internal/store"
 )
 
 // newTestServer builds a Server backed by a temp sqlite DB and local media dir,
-// without New()'s weather goroutine — hermetic and offline.
+// via New() (which starts no goroutines) — hermetic and offline.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,26 +32,17 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("media: %v", err)
 	}
-	tmpl, err := parseTemplates()
+	s, err := New(config.Config{
+		BaseURL:     "http://localhost:8080",
+		SiteTitle:   "TEST ARCHIVE",
+		SiteTagline: "INDEX",
+		DataDir:     dir,
+		MediaDir:    filepath.Join(dir, "media"),
+	}, st, ms, ingest.New(st, ms), nil)
 	if err != nil {
-		t.Fatalf("parse templates: %v", err)
+		t.Fatalf("new server: %v", err)
 	}
-	return &Server{
-		cfg: config.Config{
-			BaseURL:     "http://localhost:8080",
-			SiteTitle:   "TEST ARCHIVE",
-			SiteTagline: "INDEX",
-			MediaDir:    filepath.Join(dir, "media"),
-		},
-		store:            st,
-		media:            ms,
-		tmpl:             tmpl,
-		loginRL:          newLoginLimiter(),
-		translateRL:      newTokenBucket(20.0/(10*60), 5),
-		apiCreateIPRL:    newTokenBucket(20.0/60, 5),
-		apiCreateTokenRL: newTokenBucket(60.0/3600, 5),
-		translateCache:   newTranslateCache(),
-	}
+	return s
 }
 
 func getReq(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -167,7 +159,7 @@ func TestSrcsetClampsSmallImage(t *testing.T) {
 	id, err := s.store.CreateItem(context.Background(), store.Item{
 		Kind: "image", Title: "Small", Visibility: "public",
 		CoverKey: "items/s/full.jpg", ThumbKey: "items/s/thumb.jpg", SmallKey: "items/s/small.jpg",
-		Width:    459, Height: 332, // full + thumb both 459px (no upscale); small caps at 400px
+		Width: 459, Height: 332, // full + thumb both 459px (no upscale); small caps at 400px
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -320,12 +312,12 @@ func TestScanOrphans(t *testing.T) {
 	ctx := context.Background()
 
 	// orphan file: present in storage, referenced by no media row
-	_ = s.media.Put(ctx, "items/orphan1/full.jpg", "image/jpeg", 2, strings.NewReader("xx"))
+	_ = s.media.Put(ctx, "items/orphan1/full.jpg", "image/jpeg", []byte("xx"), false)
 
 	// healthy item: cover blob present + a media row referencing it
 	okID, _ := s.store.CreateItem(ctx, store.Item{Kind: "image", Title: "ok", Visibility: "public", CoverKey: "items/ok/full.jpg"})
-	_ = s.media.Put(ctx, "items/ok/full.jpg", "image/jpeg", 2, strings.NewReader("yy"))
-	_, _ = s.store.AddMedia(ctx, store.Media{ItemID: okID, Variant: "full", StorageKey: "items/ok/full.jpg", OnLocal: true})
+	_ = s.media.Put(ctx, "items/ok/full.jpg", "image/jpeg", []byte("yy"), false)
+	_ = s.store.UpsertMedia(ctx, store.Media{ItemID: okID, Variant: "full", StorageKey: "items/ok/full.jpg", OnLocal: true})
 
 	// broken item: cover key set, but no blob in storage
 	brokenID, _ := s.store.CreateItem(ctx, store.Item{Kind: "image", Title: "broken", Visibility: "public", CoverKey: "items/missing/full.jpg"})
@@ -372,7 +364,7 @@ func TestMaintenancePage(t *testing.T) {
 	if err := s.store.CreateSession(ctx, HashSession(sid), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	_ = s.media.Put(ctx, "items/orphanX/full.jpg", "image/jpeg", 1, strings.NewReader("z"))
+	_ = s.media.Put(ctx, "items/orphanX/full.jpg", "image/jpeg", []byte("z"), false)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/maintenance", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sid})

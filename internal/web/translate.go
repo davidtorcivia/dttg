@@ -9,15 +9,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	translateMaxRunes = 5000
-	translateCacheTTL = time.Hour
+	translateMaxRunes   = 5000
+	translateCacheTTL   = time.Hour
+	translateCacheLimit = 2000 // entries; bounds memory (each holds up to ~2×5000 runes)
 )
 
 type translateCacheEntry struct {
@@ -46,7 +46,6 @@ func (c *translateCache) get(key string) (text, source string, ok bool) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.prune(now)
 	e, ok := c.data[key]
 	if !ok || now.After(e.exp) {
 		return "", "", false
@@ -59,6 +58,9 @@ func (c *translateCache) set(key, text, source string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.prune(now)
+	if len(c.data) >= translateCacheLimit {
+		return // full of live entries; skip caching rather than grow without bound
+	}
 	c.data[key] = translateCacheEntry{text: text, source: source, exp: now.Add(translateCacheTTL)}
 }
 
@@ -73,13 +75,8 @@ func (c *translateCache) prune(now time.Time) {
 // handleTranslate translates a block of text (auto-detecting the source language)
 // to the requested target (default "en"). Public, length-capped, rate-limited.
 func (s *Server) handleTranslate(w http.ResponseWriter, r *http.Request) {
-	ip := s.clientIP(r)
-	if s.translateRL != nil {
-		if ok, retry := s.translateRL.allow(ip); !ok {
-			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-			writeJSONError(w, http.StatusTooManyRequests, "rate limited")
-			return
-		}
+	if !limit(w, s.translateRL, s.clientIP(r)) {
+		return
 	}
 
 	var body struct {
@@ -104,32 +101,21 @@ func (s *Server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheKey := translateCacheKey(target, text)
-	if s.translateCache != nil {
-		if translated, source, ok := s.translateCache.get(cacheKey); ok {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"text": translated, "source": source})
+	translated, source, ok := s.translateCache.get(cacheKey)
+	if !ok {
+		var err error
+		if translated, source, err = translateText(r.Context(), text, target); err != nil {
+			writeJSONError(w, http.StatusBadGateway, "translation unavailable")
 			return
 		}
-	}
-
-	translated, source, err := translateText(r.Context(), text, target)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "translation unavailable")
-		return
-	}
-	if s.translateCache != nil {
 		s.translateCache.set(cacheKey, translated, source)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"text": translated, "source": source})
+	writeJSON(w, http.StatusOK, map[string]any{"text": translated, "source": source})
 }
 
 // translateText uses Google's public (keyless) translate endpoint. It auto-detects
 // the source language and returns (translation, detectedSource).
 func translateText(ctx context.Context, text, target string) (string, string, error) {
-	if target == "" {
-		target = "en"
-	}
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 

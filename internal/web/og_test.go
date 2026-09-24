@@ -37,7 +37,7 @@ func seedImageItems(t *testing.T, s *Server, n int) {
 		key := "items/og" + strconv.Itoa(i) + "/full.jpg"
 		col := color.RGBA{uint8(30 + i*25), 90, uint8(180 - i*12), 255}
 		jpegBytes := syntheticJPEG(t, col)
-		if err := s.media.Put(ctx, key, "image/jpeg", int64(len(jpegBytes)), bytes.NewReader(jpegBytes)); err != nil {
+		if err := s.media.Put(ctx, key, "image/jpeg", jpegBytes, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.store.CreateItem(ctx, store.Item{
