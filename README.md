@@ -40,7 +40,7 @@ easter eggs.
 
 ## Quick start (local dev)
 
-Requires Go 1.25+ (see `go.mod`).
+Requires Go 1.27.3+ (see `go.mod`).
 
 ```sh
 # from the repo root

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build (pure-Go, no cgo => static binary; cross-compiled to the target arch) ---
-FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
