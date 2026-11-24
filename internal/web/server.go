@@ -53,6 +53,8 @@ type Server struct {
 	siteOG           siteOGCache                  // cached default (site-wide) OG share card
 	site             atomic.Pointer[siteIdentity] // admin-editable branding, lock-free reads
 	siteCache        siteCache
+	pageCache        pageCache
+	mediaOrigin      string // pre-parsed origin of MediaBaseURL for <link rel="preconnect">
 	csrfKey          []byte
 }
 
@@ -118,10 +120,19 @@ func New(cfg config.Config, st *store.Store, ms media.Store, ing *ingest.Service
 		shareRL:          newTokenBucket(6.0/3600, 3),     // 6 / hour per IP
 		translateCache:   newTranslateCache(),
 		ogCache:          newOGCache(256),
+		mediaOrigin:      originOf(cfg.MediaBaseURL),
 		csrfKey:          csrfKey,
 	}
 	s.loadSite(ctx) // publish admin-editable branding (title/url/etc.)
 	return s, nil
+}
+
+func originOf(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // persistentKey returns a random 32-byte secret stored under name, creating it

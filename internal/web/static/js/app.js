@@ -58,26 +58,51 @@
     for (var j = 1; j < heights.length; j++) if (heights[j] < heights[m]) m = j;
     return m;
   }
+  // Zero-reflow mathematical height estimator: reads HTML width/height attributes
+  // so masonry distributes all cards off-DOM in DocumentFragments with ZERO
+  // forced synchronous browser layouts (eliminating 48+ reflows on initial paint).
+  function estimateCardHeight(card) {
+    var img = card.querySelector('.card-img-container img');
+    var h = 0.85;
+    if (img) {
+      var w = parseInt(img.getAttribute('width'), 10);
+      var ih = parseInt(img.getAttribute('height'), 10);
+      if (w > 0 && ih > 0) h = ih / w;
+    } else if (card.querySelector('.doc-tile')) {
+      h = 4 / 3;
+    } else {
+      var txt = card.querySelector('.card-text');
+      h = txt ? Math.min(1.6, Math.max(0.32, (txt.textContent || '').length / 260)) : 0.6;
+    }
+    if (card.classList.contains('card--multi')) h += 0.11;
+    return h + 0.18; // normalized bottom margin
+  }
   function layoutMasonry(grid, force) {
     var n = gridColumnCount(gridMaxCols(grid));
     if (!force && grid.__n === n) return;
     if (!grid.__order) grid.__order = Array.prototype.slice.call(grid.querySelectorAll('.card'));
     var cards = grid.__order;
-    grid.textContent = '';
-    grid.classList.add('grid--cols');
-    var cols = [], heights = [];
+    var cols = [], frags = [], heights = [];
     for (var i = 0; i < n; i++) {
       var c = document.createElement('div');
       c.className = 'grid-col';
-      grid.appendChild(c);
       cols.push(c);
+      frags.push(document.createDocumentFragment());
       heights.push(0);
     }
     cards.forEach(function (card) {
       var m = shortestCol(heights);
-      cols[m].appendChild(card);
-      heights[m] = cols[m].offsetHeight;
+      frags[m].appendChild(card);
+      heights[m] += estimateCardHeight(card);
     });
+    var gridFrag = document.createDocumentFragment();
+    for (var k = 0; k < n; k++) {
+      cols[k].appendChild(frags[k]);
+      gridFrag.appendChild(cols[k]);
+    }
+    grid.textContent = '';
+    grid.classList.add('grid--cols');
+    grid.appendChild(gridFrag);
     grid.__cols = cols;
     grid.__heights = heights;
     grid.__n = n;
@@ -88,7 +113,7 @@
     if (!cols || !cols.length) { grid.appendChild(card); return; }
     var m = shortestCol(heights);
     cols[m].appendChild(card);
-    heights[m] = cols[m].offsetHeight;
+    heights[m] += estimateCardHeight(card);
   }
 
   // Blur-up: show tiny placeholder behind a thumbnail while it loads, then clear
@@ -309,8 +334,6 @@
         else if (m.addListener) m.addListener(relayout);
       });
     }
-    window.addEventListener('load', function () { layoutMasonry(grid, true); });
-    window.addEventListener('pageshow', function (e) { if (e.persisted) layoutMasonry(grid, true); });
     var rt;
     window.addEventListener('resize', function () {
       clearTimeout(rt);
@@ -318,23 +341,30 @@
     });
   })();
 
-  // ---- custom blend-mode cursor (fine pointers only) ----
+  // ---- custom blend-mode cursor (GPU-composited translate3d, rAF-coalesced) ----
   if (window.matchMedia('(pointer: fine)').matches) {
     var cursor = document.createElement('div');
     cursor.className = 'cursor';
     document.body.appendChild(cursor);
+    var curX = -100, curY = -100, curRAF = 0;
     document.addEventListener('mousemove', function (e) {
-      cursor.style.left = e.clientX + 'px';
-      cursor.style.top = e.clientY + 'px';
-    });
+      curX = e.clientX;
+      curY = e.clientY;
+      if (!curRAF) {
+        curRAF = requestAnimationFrame(function () {
+          curRAF = 0;
+          cursor.style.transform = 'translate3d(' + curX + 'px,' + curY + 'px,0) translate(-50%,-50%)';
+        });
+      }
+    }, { passive: true });
     document.body.addEventListener('mouseover', function (e) {
       var hot = e.target.closest('a, button, img, .card');
       cursor.classList.toggle('hovering', !!hot);
       cursor.classList.toggle('cursor-hidden', !!e.target.closest('input, textarea, select, [contenteditable]'));
-    });
+    }, { passive: true });
   }
 
-  // ---- loupe: magnifier lens over zoomable images (fine pointers) ----
+  // ---- loupe: magnifier lens over zoomable images (GPU translate3d) ----
   var hideLoupe = function () {};
   if (window.matchMedia('(pointer: fine)').matches) {
     var SIZE = 190, ZOOM = 2.2, loupe = null, blendCursor = null;
@@ -361,11 +391,10 @@
       var x = e.clientX - r.left, y = e.clientY - r.top;
       loupe.style.backgroundSize = (r.width * ZOOM) + 'px ' + (r.height * ZOOM) + 'px';
       loupe.style.backgroundPosition = (SIZE / 2 - x * ZOOM) + 'px ' + (SIZE / 2 - y * ZOOM) + 'px';
-      loupe.style.left = e.clientX + 'px';
-      loupe.style.top = e.clientY + 'px';
+      loupe.style.transform = 'translate3d(' + e.clientX + 'px,' + e.clientY + 'px,0) translate(-50%,-50%)';
       loupe.classList.add('on');
       if (blendCursor) blendCursor.style.opacity = '0';
-    });
+    }, { passive: true });
   }
 
   // ---- search overlay + live results + keyboard arrow nav ----
@@ -1643,11 +1672,12 @@
     if (done) markEnd();
   })();
 
-  // ---- intent prefetch ----
+  // ---- intent prefetch + cover image warmup + idle prev/next warmup ----
   (function () {
     var seen = {};
+    var saveData = navigator.connection && (navigator.connection.saveData || navigator.connection.effectiveType === '2g');
     var prefetch = function (url) {
-      if (!url || url.charAt(0) !== '/' || seen[url]) return;
+      if (saveData || !url || url.charAt(0) !== '/' || seen[url]) return;
       seen[url] = 1;
       var l = document.createElement('link');
       l.rel = 'prefetch';
@@ -1655,13 +1685,46 @@
       l.href = url;
       document.head.appendChild(l);
     };
-    var onIntent = function (e) {
-      var a = e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]');
-      if (a) prefetch(a.getAttribute('href'));
+    var warmCard = function (a) {
+      if (saveData || !a) return;
+      prefetch(a.getAttribute('href'));
+      // Warm full-res cover image so navigating to /item/{id} paints full plate in 0ms.
+      var full = a.getAttribute('data-full');
+      if (full) preloadURL(full);
+      // Warm slide #2 thumbnail for instant card peeking on multi-image series.
+      var slides = parseGallery(a);
+      if (slides && slides[1]) preloadURL(slides[1].thumb || slides[1].full);
     };
-    document.addEventListener('mouseover', onIntent, { passive: true });
-    document.addEventListener('focusin', onIntent);
-    document.addEventListener('touchstart', onIntent, { passive: true });
+    var hoverTimer = 0;
+    document.addEventListener('mouseover', function (e) {
+      var a = e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]');
+      if (!a) return;
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(function () { warmCard(a); }, 55);
+    }, { passive: true });
+    document.addEventListener('mouseout', function (e) {
+      if (e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]')) {
+        clearTimeout(hoverTimer);
+      }
+    }, { passive: true });
+    document.addEventListener('pointerdown', function (e) {
+      var a = e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]');
+      if (a) warmCard(a);
+    }, { passive: true });
+    document.addEventListener('focusin', function (e) {
+      var a = e.target.closest && e.target.closest('a.card, a.dn-link, a.related-item, a.search-result, a[href^="/item/"]');
+      if (a) warmCard(a);
+    });
+    // On detail pages, quietly prefetch Previous & Next plates during idle time
+    // so arrow-key or click stepping through the archive feels instantaneous.
+    var prevNext = [document.getElementById('nav-prev'), document.getElementById('nav-next')];
+    if (!saveData && (prevNext[0] || prevNext[1])) {
+      var warmAdj = function () {
+        prevNext.forEach(function (a) { if (a) prefetch(a.getAttribute('href')); });
+      };
+      if (window.requestIdleCallback) window.requestIdleCallback(warmAdj, { timeout: 1200 });
+      else setTimeout(warmAdj, 450);
+    }
   })();
 
   // ---- colophon reveal ----

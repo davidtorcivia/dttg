@@ -18,6 +18,8 @@ type siteData struct {
 	catsPublic   []store.Category
 	catsAdmin    []store.Category
 	tracking     string
+	publicStats  store.Stats
+	hasStats     bool
 }
 
 type siteCache struct {
@@ -41,10 +43,15 @@ func (s *Server) siteData(ctx context.Context) *siteData {
 	d.catsPublic, _ = s.store.ListCategories(ctx, false)
 	d.catsAdmin, _ = s.store.ListCategories(ctx, true)
 	d.tracking, _ = s.store.GetSetting(ctx, "tracking_script")
+	if st, err := s.store.PublicStats(ctx); err == nil {
+		d.publicStats = st
+		d.hasStats = true
+	}
 	s.siteCache.snap.Store(d)
 	return d
 }
 
 func (s *Server) invalidateSiteCache() {
 	s.siteCache.snap.Store(nil)
+	s.pageCache.clear()
 }

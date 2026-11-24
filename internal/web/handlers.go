@@ -95,6 +95,7 @@ type pageData struct {
 	ColorScheme    string             // <meta name="color-scheme"> — explicit theme from cookie, else "light dark"
 	ThemeAttr      string             // server-rendered <html data-theme> from cookie ("dark"/"light"/""), kills the FOUC
 	BoardColumns   int                // masonry columns on wide screens (3 or 4)
+	MediaOrigin    string             // external media CDN origin (e.g. https://m.disinfo.zone) for preconnect
 	JSONLD         template.HTML      // detail page: schema.org structured data (already JSON-escaped)
 	Nonce          string             // per-request CSP nonce for inline <script> tags
 	CSRFToken      string             // session-bound token for admin POST forms
@@ -110,22 +111,23 @@ type pageData struct {
 const boardPage = 48 // items per board page (initial load + each infinite-scroll batch)
 
 func (s *Server) page(r *http.Request, title string) pageData {
+	return s.pageWithNonce(r, title, "")
+}
+
+func (s *Server) pageWithNonce(r *http.Request, title, nonceOverride string) pageData {
 	isAdmin := s.isAdmin(r)
-	// The client mirrors an explicit light/dark choice into this cookie so the server
-	// can declare color-scheme in the served HTML head from byte 0. That makes the
-	// browser's very first paint (including the canvas it shows between page
-	// navigations) match the chosen theme — which is what kills the white flash in
-	// Firefox, where a JS-set color-scheme lands too late. No cookie => follow the OS.
 	colorScheme, themeAttr := "light dark", ""
 	if c, err := r.Cookie("dnttg-theme"); err == nil && (c.Value == "dark" || c.Value == "light") {
 		colorScheme, themeAttr = c.Value, c.Value
 	}
-	// Overlay the admin-editable branding onto the per-request config copy so every
-	// template ({{.Cfg.SiteTitle}} etc.) renders the effective values.
 	site := s.siteID()
 	cfg := s.cfg
 	cfg.SiteTitle, cfg.SiteTagline, cfg.BaseURL = site.Title, site.Tagline, site.BaseURL
 	sd := s.siteData(r.Context())
+	nonce := nonceOverride
+	if nonce == "" {
+		nonce = nonceFromContext(r.Context())
+	}
 	pd := pageData{
 		Cfg:          cfg,
 		IsAdmin:      isAdmin,
@@ -134,8 +136,9 @@ func (s *Server) page(r *http.Request, title string) pageData {
 		PageTitle:    title,
 		ColorScheme:  colorScheme,
 		ThemeAttr:    themeAttr,
-		Nonce:        nonceFromContext(r.Context()),
+		Nonce:        nonce,
 		BoardColumns: sd.boardColumns,
+		MediaOrigin:  s.mediaOrigin,
 		Meta: metaTags{
 			Description: s.metaDescription(),
 			URL:         s.absURL(r.URL.Path),
@@ -362,34 +365,37 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	if !store.ValidColorBucket(colorFilter) {
 		colorFilter = ""
 	}
-	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Cards: true, Color: colorFilter, Limit: boardPage}
-	if strings.HasPrefix(r.URL.Path, "/category/") {
-		f.CategorySlug = r.PathValue("slug")
-	} else {
-		f.TagSlug = r.PathValue("slug")
-	}
-	items, err := s.store.ListItems(r.Context(), f)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	pd := s.page(r, s.siteTitle())
-	pd.ActiveCat, pd.ActiveTag, pd.ActiveColor = f.CategorySlug, f.TagSlug, colorFilter
-	pd.Palette = store.PaletteSwatches
-	pd.Items = s.views(items)
-	// The masonry distributes cards round-robin, so the first row is the first
-	// N items — load those eagerly at high priority to help the board's LCP.
-	for i := 0; i < len(pd.Items) && i < pd.BoardColumns; i++ {
-		pd.Items[i].Eager = true
-	}
-	if n := len(items); n > 0 {
-		pd.CursorCreated, pd.CursorID = items[n-1].CreatedAt.Unix(), items[n-1].ID
-	}
-	pd.BoardDone = len(items) < boardPage
-	if st, err := s.store.PublicStats(r.Context()); err == nil {
-		pd.Stats = &st
-	}
-	s.render(w, http.StatusOK, "index.html", pd)
+	s.servePublicCached(w, r, "index.html", func(nonceOverride string) (pageData, int, bool) {
+		f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Cards: true, Color: colorFilter, Limit: boardPage}
+		if strings.HasPrefix(r.URL.Path, "/category/") {
+			f.CategorySlug = r.PathValue("slug")
+		} else {
+			f.TagSlug = r.PathValue("slug")
+		}
+		items, err := s.store.ListItems(r.Context(), f)
+		if err != nil {
+			s.serverError(w, r, err)
+			return pageData{}, 0, false
+		}
+		pd := s.pageWithNonce(r, s.siteTitle(), nonceOverride)
+		pd.ActiveCat, pd.ActiveTag, pd.ActiveColor = f.CategorySlug, f.TagSlug, colorFilter
+		pd.Palette = store.PaletteSwatches
+		pd.Items = s.views(items)
+		// The masonry distributes cards round-robin across the first row — mark
+		// them eager so they render at opacity:1 immediately and maximize LCP.
+		for i := 0; i < len(pd.Items) && i < pd.BoardColumns; i++ {
+			pd.Items[i].Eager = true
+		}
+		if n := len(items); n > 0 {
+			pd.CursorCreated, pd.CursorID = items[n-1].CreatedAt.Unix(), items[n-1].ID
+		}
+		pd.BoardDone = len(items) < boardPage
+		if sd := s.siteData(r.Context()); sd.hasStats {
+			st := sd.publicStats
+			pd.Stats = &st
+		}
+		return pd, http.StatusOK, true
+	})
 }
 
 // handleRandom redirects to a random archived item (respecting visibility).
@@ -424,12 +430,23 @@ func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load items", http.StatusInternalServerError)
 		return
 	}
+	if !s.isAdmin(r) {
+		w.Header().Set("Cache-Control", publicHTMLCache)
+		w.Header().Set("Vary", "Cookie, Accept-Encoding")
+	} else {
+		w.Header().Set("Cache-Control", "private, no-cache")
+	}
 	s.writeCards(w, items)
 }
 
 // handleAPIStats returns public archive vitals (for the colophon / easter eggs).
 func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
-	st, _ := s.store.PublicStats(r.Context())
+	sd := s.siteData(r.Context())
+	st := sd.publicStats
+	if !sd.hasStats {
+		st, _ = s.store.PublicStats(r.Context())
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count":  st.Count,
 		"oldest": st.Oldest.Format("Jan 2, 2006"),
@@ -448,40 +465,42 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	isAdmin := s.isAdmin(r)
-	it, err := s.store.GetItem(r.Context(), id, isAdmin)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	if it == nil {
-		s.notFound(w, r)
-		return
-	}
-	pd := s.page(r, firstNonEmpty(it.Title, s.siteTitle()))
-	v := s.view(*it)
-	pd.Item = &v
-
-	// SEO / Open Graph for this item
-	pd.Meta.Type = "article"
-	pd.Meta.URL = s.absURL(v.DetailURL)
-	pd.Meta.Description = firstNonEmpty(itemDescription(*it), pd.Meta.Description)
-	pd.Meta.Image = s.absURL(v.DetailURL + "/og.jpg")
-	pd.JSONLD = s.itemJSONLD(v, pd.Nonce)
-
-	// Prev/next within the board ordering (newer / older)
-	if prevID, nextID, err := s.store.GetAdjacent(r.Context(), *it, isAdmin); err == nil {
-		if prevID != 0 {
-			pd.PrevURL = itemPath(prevID)
+	s.servePublicCached(w, r, "detail.html", func(nonceOverride string) (pageData, int, bool) {
+		isAdmin := s.isAdmin(r)
+		it, err := s.store.GetItem(r.Context(), id, isAdmin)
+		if err != nil {
+			s.serverError(w, r, err)
+			return pageData{}, 0, false
 		}
-		if nextID != 0 {
-			pd.NextURL = itemPath(nextID)
+		if it == nil {
+			s.notFound(w, r)
+			return pageData{}, 0, false
 		}
-	}
-	if rel, err := s.store.GetRelated(r.Context(), *it, 6, isAdmin); err == nil {
-		pd.Related = s.views(rel)
-	}
-	s.render(w, http.StatusOK, "detail.html", pd)
+		pd := s.pageWithNonce(r, firstNonEmpty(it.Title, s.siteTitle()), nonceOverride)
+		v := s.view(*it)
+		pd.Item = &v
+
+		// SEO / Open Graph for this item
+		pd.Meta.Type = "article"
+		pd.Meta.URL = s.absURL(v.DetailURL)
+		pd.Meta.Description = firstNonEmpty(itemDescription(*it), pd.Meta.Description)
+		pd.Meta.Image = s.absURL(v.DetailURL + "/og.jpg")
+		pd.JSONLD = s.itemJSONLD(v, pd.Nonce)
+
+		// Prev/next within the board ordering (newer / older)
+		if prevID, nextID, err := s.store.GetAdjacent(r.Context(), *it, isAdmin); err == nil {
+			if prevID != 0 {
+				pd.PrevURL = itemPath(prevID)
+			}
+			if nextID != 0 {
+				pd.NextURL = itemPath(nextID)
+			}
+		}
+		if rel, err := s.store.GetRelated(r.Context(), *it, 6, isAdmin); err == nil {
+			pd.Related = s.views(rel)
+		}
+		return pd, http.StatusOK, true
+	})
 }
 
 func itemDescription(it store.Item) string {
