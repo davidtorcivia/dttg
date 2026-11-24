@@ -71,11 +71,29 @@
           <code class="token-secret-val" id="minted-token-secret">{{.Secret}}</code>
           <button type="button" class="btn-subtle" data-copy-target="#minted-token-secret">Copy key</button>
         </div>
-        <details class="token-mcp-details">
-          <summary>MCP client JSON snippet</summary>
-          <pre class="token-mcp-pre" id="minted-token-mcp">{{.MCPJSON}}</pre>
-          <button type="button" class="btn-subtle" data-copy-target="#minted-token-mcp">Copy MCP JSON</button>
-        </details>
+        <div class="token-snippets">
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Claude Desktop (<code>claude_desktop_config.json</code>)</span>
+              <button type="button" class="btn-subtle" data-copy-target="#minted-mcp-desktop">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="minted-mcp-desktop">{{.ClaudeDesktop}}</pre>
+          </div>
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Cursor / Antigravity / VS Code / Streamable HTTP MCP</span>
+              <button type="button" class="btn-subtle" data-copy-target="#minted-mcp-http">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="minted-mcp-http">{{.HTTPJSON}}</pre>
+          </div>
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Claude Code CLI</span>
+              <button type="button" class="btn-subtle" data-copy-target="#minted-mcp-cli">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="minted-mcp-cli">{{.ClaudeCode}}</pre>
+          </div>
+        </div>
       </div>
       {{- end}}
 
@@ -114,6 +132,34 @@
       {{else}}
       <p class="muted">No auth keys yet. Generate one above for MCP clients or the browser extension.</p>
       {{end}}
+
+      <details class="token-mcp-details">
+        <summary>Public MCP &amp; LLM connection snippets (read-only, no key required)</summary>
+        <p class="muted">Endpoint: <code>{{.Settings.MCP.Endpoint}}</code> · Manifest: <a href="/llms.txt"><code>{{.Settings.MCP.LLMsURL}}</code></a>. Generate or rotate a key above to get pre-filled snippets with full private read &amp; curate/save access.</p>
+        <div class="token-snippets">
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Claude Desktop (<code>claude_desktop_config.json</code>)</span>
+              <button type="button" class="btn-subtle" data-copy-target="#pub-mcp-desktop">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="pub-mcp-desktop">{{.Settings.MCP.ClaudeDesktop}}</pre>
+          </div>
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Cursor / Antigravity / VS Code / Streamable HTTP MCP</span>
+              <button type="button" class="btn-subtle" data-copy-target="#pub-mcp-http">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="pub-mcp-http">{{.Settings.MCP.HTTPJSON}}</pre>
+          </div>
+          <div class="token-snippet-block">
+            <div class="token-snippet-head">
+              <span>Claude Code CLI</span>
+              <button type="button" class="btn-subtle" data-copy-target="#pub-mcp-cli">Copy</button>
+            </div>
+            <pre class="token-mcp-pre" id="pub-mcp-cli">{{.Settings.MCP.ClaudeCode}}</pre>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="settings-section">

@@ -66,14 +66,25 @@ type settingsView struct {
 	Backup         backupView
 	Tokens         []store.APIToken
 	MintedToken    *mintedTokenView
+	MCP            mcpSnippets
 	ActiveSessions int
 }
 
+type mcpSnippets struct {
+	Endpoint      string
+	LLMsURL       string
+	HTTPJSON      string
+	ClaudeDesktop string
+	ClaudeCode    string
+}
+
 type mintedTokenView struct {
-	Name    string
-	Secret  string
-	Action  string // "generated" or "rotated"
-	MCPJSON string
+	Name          string
+	Secret        string
+	Action        string // "generated" or "rotated"
+	HTTPJSON      string
+	ClaudeDesktop string
+	ClaudeCode    string
 }
 
 type backupView struct {
@@ -519,6 +530,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status i
 	}
 	sv.Tokens, _ = s.store.ListTokens(r.Context())
 	sv.ActiveSessions, _ = s.store.CountActiveSessions(r.Context())
+	sv.MCP = s.buildMCPSnippets("")
 	pd := s.page(r, "SETTINGS")
 	pd.Settings, pd.Error = sv, msg
 	pd.Notice = strings.TrimSpace(r.URL.Query().Get("notice"))
@@ -583,19 +595,34 @@ func (s *Server) currentSettingsView(r *http.Request) *settingsView {
 	}
 }
 
-func (s *Server) mcpSnippetForToken(tok string) string {
-	cfg := map[string]any{
+func (s *Server) buildMCPSnippets(tok string) mcpSnippets {
+	endpoint := s.absURL("/mcp")
+	httpServer := map[string]any{"url": endpoint}
+	desktopArgs := []string{"-y", "mcp-remote", endpoint}
+	claudeCode := fmt.Sprintf("claude mcp add --transport http donottouchtheglass %s", endpoint)
+	if tok != "" {
+		httpServer["headers"] = map[string]string{"Authorization": "Bearer " + tok}
+		desktopArgs = append(desktopArgs, "--header", "Authorization: Bearer "+tok)
+		claudeCode += fmt.Sprintf(` --header "Authorization: Bearer %s"`, tok)
+	}
+	httpJSON, _ := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{"donottouchtheglass": httpServer},
+	}, "", "  ")
+	desktopJSON, _ := json.MarshalIndent(map[string]any{
 		"mcpServers": map[string]any{
 			"donottouchtheglass": map[string]any{
-				"url": s.absURL("/mcp"),
-				"headers": map[string]string{
-					"Authorization": "Bearer " + tok,
-				},
+				"command": "npx",
+				"args":    desktopArgs,
 			},
 		},
+	}, "", "  ")
+	return mcpSnippets{
+		Endpoint:      endpoint,
+		LLMsURL:       s.absURL("/llms.txt"),
+		HTTPJSON:      string(httpJSON),
+		ClaudeDesktop: string(desktopJSON),
+		ClaudeCode:    claudeCode,
 	}
-	b, _ := json.MarshalIndent(cfg, "", "  ")
-	return string(b)
 }
 
 func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) {
@@ -612,12 +639,15 @@ func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) 
 		s.serverError(w, r, err)
 		return
 	}
+	sn := s.buildMCPSnippets(tok)
 	sv := s.currentSettingsView(r)
 	sv.MintedToken = &mintedTokenView{
-		Name:    name,
-		Secret:  tok,
-		Action:  "generated",
-		MCPJSON: s.mcpSnippetForToken(tok),
+		Name:          name,
+		Secret:        tok,
+		Action:        "generated",
+		HTTPJSON:      sn.HTTPJSON,
+		ClaudeDesktop: sn.ClaudeDesktop,
+		ClaudeCode:    sn.ClaudeCode,
 	}
 	s.renderSettings(w, r, http.StatusOK, sv, "")
 }
@@ -638,12 +668,15 @@ func (s *Server) handleAdminTokenRotate(w http.ResponseWriter, r *http.Request) 
 		s.serverError(w, r, err)
 		return
 	}
+	sn := s.buildMCPSnippets(tok)
 	sv := s.currentSettingsView(r)
 	sv.MintedToken = &mintedTokenView{
-		Name:    updated.Name,
-		Secret:  tok,
-		Action:  "rotated",
-		MCPJSON: s.mcpSnippetForToken(tok),
+		Name:          updated.Name,
+		Secret:        tok,
+		Action:        "rotated",
+		HTTPJSON:      sn.HTTPJSON,
+		ClaudeDesktop: sn.ClaudeDesktop,
+		ClaudeCode:    sn.ClaudeCode,
 	}
 	s.renderSettings(w, r, http.StatusOK, sv, "")
 }

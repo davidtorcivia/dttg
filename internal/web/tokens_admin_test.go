@@ -59,6 +59,11 @@ func TestAdminAuthKeyLifecycle(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), firstPrefix+"••••••••") {
 		t.Errorf("expected masked prefix %q in token table", firstPrefix)
 	}
+	for _, want := range []string{"mcp-remote", "claude mcp add", "Bearer " + firstSecret} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("expected minted MCP snippet to contain %q", want)
+		}
+	}
 
 	// Verify the generated key authenticates against /api/taxonomy and /mcp
 	apiReq := httptest.NewRequest(http.MethodGet, "/api/taxonomy", nil)
