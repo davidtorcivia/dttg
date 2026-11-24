@@ -25,7 +25,7 @@ func (s *Server) refreshWeather() {
 	if err != nil {
 		return
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := outboundClient.Do(req)
 	if err != nil {
 		return
 	}

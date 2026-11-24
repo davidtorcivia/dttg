@@ -27,7 +27,7 @@ func mirrorable(key string) bool { return !strings.HasPrefix(path.Base(key), "or
 // imageVariant reports a derived, regenerable image variant (kept on R2 only).
 func imageVariant(key string) bool {
 	switch path.Base(key) {
-	case "full.jpg", "thumb.jpg", "small.jpg":
+	case "full.jpg", "full.gif", "thumb.jpg", "small.jpg":
 		return true
 	}
 	return false

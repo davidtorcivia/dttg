@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -98,13 +99,18 @@ func (s *Server) handleAPICreateItem(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	dup, _ := s.ingest.CheckDuplicate(r.Context(), in)
 	id, err := s.ingest.Create(r.Context(), in)
 	if err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	s.invalidateSiteCache()
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "url": s.absURL(itemPath(id))})
+	resp := map[string]any{"id": id, "url": s.absURL(itemPath(id))}
+	if dup != nil && dup.ID != id {
+		resp["duplicate_of"] = dup.ID
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleAPITaxonomy returns the archive's categories and tags so the extension
@@ -131,6 +137,7 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 		var body struct {
 			Kind       string   `json:"kind"`
 			URL        string   `json:"url"`
+			URLs       []string `json:"urls"`
 			Source     string   `json:"source"`
 			Title      string   `json:"title"`
 			Note       string   `json:"note"`
@@ -142,17 +149,20 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 			return ingest.Input{}, fmt.Errorf("invalid json: %w", err)
 		}
 		return ingest.Input{
-			Kind: body.Kind, URL: strings.TrimSpace(body.URL), Source: strings.TrimSpace(body.Source),
+			Kind: body.Kind, URL: strings.TrimSpace(body.URL), URLs: body.URLs, Source: strings.TrimSpace(body.Source),
 			Title: body.Title, Note: body.Note, Category: body.Category,
 			Visibility: body.Visibility, Tags: body.Tags,
 		}, nil
 	}
 	// ParseMultipartForm falls back to ParseForm for urlencoded bodies.
-	if err := r.ParseMultipartForm(maxUpload); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+	if err := r.ParseMultipartForm(multipartMaxMem); err != nil && !errors.Is(err, http.ErrNotMultipart) {
 		if isMaxBytesError(err) {
 			return ingest.Input{}, errUploadTooLarge
 		}
 		return ingest.Input{}, fmt.Errorf("parse form: %w", err)
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	in := ingest.Input{
 		Kind:       r.FormValue("kind"),
@@ -164,32 +174,73 @@ func (s *Server) parseItemInput(r *http.Request) (ingest.Input, error) {
 		Visibility: r.FormValue("visibility"),
 		Tags:       splitTags(r.FormValue("tags")),
 	}
-	var err error
-	in.FileBytes, in.FileName, err = readUpload(r)
-	return in, err
+	files, err := readUploads(r)
+	if err != nil {
+		return in, err
+	}
+	in.Files = files
+	if len(files) == 1 {
+		in.FileBytes, in.FileName = files[0].Bytes, files[0].Name
+	}
+	return in, nil
 }
 
-// readUpload returns the "file" form part, if any, capped at maxUpload.
-func readUpload(r *http.Request) ([]byte, string, error) {
-	f, fh, err := r.FormFile("file")
-	if errors.Is(err, http.ErrMissingFile) || errors.Is(err, http.ErrNotMultipart) {
-		return nil, "", nil
-	}
-	if err != nil {
-		if isMaxBytesError(err) {
-			return nil, "", errUploadTooLarge
+// readUploads returns all files submitted under "file" or "files" multipart keys,
+// enforcing maxUpload across the combined total.
+func readUploads(r *http.Request) ([]ingest.UploadFile, error) {
+	if r.MultipartForm == nil {
+		f, fh, err := r.FormFile("file")
+		if errors.Is(err, http.ErrMissingFile) || errors.Is(err, http.ErrNotMultipart) {
+			return nil, nil
 		}
-		return nil, "", fmt.Errorf("file: %w", err)
+		if err != nil {
+			if isMaxBytesError(err) {
+				return nil, errUploadTooLarge
+			}
+			return nil, fmt.Errorf("file: %w", err)
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, maxUpload+1))
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("read upload: %w", err)
+		case len(data) > maxUpload:
+			return nil, errUploadTooLarge
+		}
+		return []ingest.UploadFile{{Bytes: data, Name: fh.Filename}}, nil
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxUpload+1))
-	switch {
-	case err != nil:
-		return nil, "", fmt.Errorf("read upload: %w", err)
-	case len(data) > maxUpload:
-		return nil, "", errUploadTooLarge
+	var headers []*multipart.FileHeader
+	headers = append(headers, r.MultipartForm.File["file"]...)
+	headers = append(headers, r.MultipartForm.File["files"]...)
+	if len(headers) == 0 {
+		return nil, nil
 	}
-	return data, fh.Filename, nil
+	var out []ingest.UploadFile
+	var total int64
+	for _, fh := range headers {
+		f, err := fh.Open()
+		if err != nil {
+			return nil, fmt.Errorf("file %s: %w", fh.Filename, err)
+		}
+		remain := int64(maxUpload) - total
+		if remain < 0 {
+			_ = f.Close()
+			return nil, errUploadTooLarge
+		}
+		data, err := io.ReadAll(io.LimitReader(f, remain+1))
+		_ = f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read upload: %w", err)
+		}
+		total += int64(len(data))
+		if total > maxUpload {
+			return nil, errUploadTooLarge
+		}
+		if len(data) > 0 {
+			out = append(out, ingest.UploadFile{Bytes: data, Name: fh.Filename})
+		}
+	}
+	return out, nil
 }
 
 // handleShare receives content shared to the installed PWA (Android share sheet).
@@ -205,9 +256,12 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1)
-	if err := r.ParseMultipartForm(maxUpload); isMaxBytesError(err) {
+	if err := r.ParseMultipartForm(multipartMaxMem); isMaxBytesError(err) {
 		http.Error(w, "upload too large", http.StatusRequestEntityTooLarge)
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	title := strings.TrimSpace(r.FormValue("title"))
 	text := strings.TrimSpace(r.FormValue("text"))
@@ -215,7 +269,7 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 	if shared == "" {
 		shared = firstURL(text)
 	}
-	data, name, err := readUpload(r)
+	files, err := readUploads(r)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errUploadTooLarge) {
@@ -226,20 +280,21 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if admin {
-		if len(data) > 0 {
-			s.createAndEdit(w, r, ingest.Input{FileBytes: data, FileName: name, Title: title})
+		if len(files) > 0 {
+			s.createAndEdit(w, r, ingest.Input{Files: files, Title: title})
 			return
 		}
 		http.Redirect(w, r, newItemURL(shared, title, text), http.StatusSeeOther)
 		return
 	}
 
-	// Unauthenticated: stash and send through login.
+	// Unauthenticated: stash and send through login (first file if shared).
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	p := store.PendingShare{ID: hex.EncodeToString(b), ExpiresAt: time.Now().Add(30 * time.Minute),
 		Title: title, Text: text, URL: shared}
-	if len(data) > 0 {
+	if len(files) > 0 {
+		data, name := files[0].Bytes, files[0].Name
 		ext := filepath.Ext(name)
 		if len(ext) > 8 {
 			ext = ""

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"time"
@@ -60,11 +61,18 @@ func (s *Server) handleFeedJSON(w http.ResponseWriter, r *http.Request) {
 			DateModified:  it.UpdatedAt.Format(time.RFC3339),
 		}
 		if isVideoItem(it) && v.FileURL != "" {
-			item.Attachments = []jfAttachment{{
+			item.Attachments = append(item.Attachments, jfAttachment{
 				URL:         s.absURL(v.FileURL),
 				MimeType:    it.FileMime,
 				SizeInBytes: it.FileSize,
-			}}
+			})
+		} else if len(v.Images) > 1 {
+			for _, img := range v.Images {
+				item.Attachments = append(item.Attachments, jfAttachment{
+					URL:      s.absURL(img.CoverURL),
+					MimeType: "image/jpeg",
+				})
+			}
 		}
 		arr = append(arr, item)
 	}
@@ -117,16 +125,23 @@ func (s *Server) handleFeedRSS(w http.ResponseWriter, r *http.Request) {
 	}}
 	for _, it := range items {
 		v := s.view(it)
-		desc := it.Note
-		if v.CoverURL != "" {
-			desc = `<img src="` + s.absURL(v.CoverURL) + `" alt=""/>` + desc
+		var desc strings.Builder
+		if len(v.Images) > 1 {
+			for _, img := range v.Images {
+				desc.WriteString(`<img src="` + html.EscapeString(s.absURL(img.CoverURL)) + `" alt="` + html.EscapeString(img.Alt) + `"/>`)
+			}
+		} else if v.CoverURL != "" {
+			desc.WriteString(`<img src="` + html.EscapeString(s.absURL(v.CoverURL)) + `" alt=""/>`)
+		}
+		if it.Note != "" {
+			desc.WriteString(html.EscapeString(it.Note))
 		}
 		ri := rssItem{
 			Title:       itemTitleOr(it),
 			Link:        s.absURL(v.DetailURL),
 			GUID:        s.absURL(v.DetailURL),
 			PubDate:     it.CreatedAt.Format(time.RFC1123Z),
-			Description: desc,
+			Description: desc.String(),
 		}
 		if isVideoItem(it) && v.FileURL != "" {
 			ri.Enclosure = &rssEnclosure{

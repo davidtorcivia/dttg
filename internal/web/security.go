@@ -39,6 +39,8 @@ func (s *Server) validCSRF(r *http.Request) bool {
 	return want != "" && got != "" && hmac.Equal([]byte(got), []byte(want))
 }
 
+const multipartMaxMem = 4 << 20 // 4 MB in RAM; larger uploads (up to 30 MB) spill to temp files
+
 // csrf rejects state-changing POSTs that lack a valid session-bound token (the
 // session cookie is SameSite=Lax, so this is defense-in-depth). The body is
 // capped first: reading csrf_token parses the whole (possibly multipart) form.
@@ -46,14 +48,27 @@ func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1)
 		// ParseMultipartForm falls back to ParseForm for urlencoded bodies.
-		if err := r.ParseMultipartForm(maxUpload); isMaxBytesError(err) {
+		if err := r.ParseMultipartForm(multipartMaxMem); isMaxBytesError(err) {
 			http.Error(w, "upload too large (max 30 MB)", http.StatusRequestEntityTooLarge)
 			return
+		}
+		if r.MultipartForm != nil {
+			defer r.MultipartForm.RemoveAll()
 		}
 		if !s.validCSRF(r) {
 			http.Error(w, "invalid or missing CSRF token", http.StatusForbidden)
 			return
 		}
+		next(w, r)
+	}
+}
+
+// noStore marks sensitive routes (admin, login, feed) uncacheable by proxies
+// and browser history caches.
+func noStore(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Add("Vary", "Cookie")
 		next(w, r)
 	}
 }
@@ -130,7 +145,7 @@ func contentSecurityPolicy(nonce string) string {
 		"font-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
 		scriptSrc,
-		"frame-src https://www.youtube.com https://www.youtube-nocookie.com https://youtube.com https://player.vimeo.com",
+		"frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://youtube.com https://player.vimeo.com",
 		"connect-src 'self' https:",
 	}, "; ")
 }

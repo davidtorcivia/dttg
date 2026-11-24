@@ -63,7 +63,16 @@ func (s *Server) scanOrphans(ctx context.Context) (maintenanceReport, error) {
 		return rep, err
 	}
 	for _, k := range keys {
-		if (k.CoverKey != "" && !present[k.CoverKey]) || (k.FileKey != "" && !present[k.FileKey]) {
+		broken := (k.CoverKey != "" && !present[k.CoverKey]) || (k.FileKey != "" && !present[k.FileKey])
+		if !broken {
+			for _, ik := range k.ImageCoverKeys {
+				if ik != "" && !present[ik] {
+					broken = true
+					break
+				}
+			}
+		}
+		if broken {
 			if it, err := s.store.GetItem(ctx, k.ID, true); err == nil && it != nil {
 				rep.BrokenItems = append(rep.BrokenItems, s.view(*it))
 			}

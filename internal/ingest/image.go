@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/gif"
 
 	"github.com/disintegration/imaging"
 )
@@ -14,6 +15,8 @@ type ProcessedImage struct {
 	FullJPEG      []byte
 	ThumbJPEG     []byte
 	SmallJPEG     []byte // ~400px wide — the smallest responsive srcset step (phones)
+	Animated      bool   // true when the source is a multi-frame animated GIF
+	AnimatedGIF   []byte // original animated GIF bytes when Animated is true
 	Placeholder   string // data:image/jpeg;base64,... (tiny blur-up)
 	DominantColor string // #rrggbb
 	Width         int
@@ -21,20 +24,21 @@ type ProcessedImage struct {
 }
 
 const (
-	fullMax   = 1600
-	thumbMax  = 800
-	smallMax  = 400
-	phMax     = 24
-	maxPixels = 40_000_000 // ~40MP — reject camera dumps that would OOM
+	fullMax          = 1600
+	thumbMax         = 800
+	smallMax         = 400
+	phMax            = 24
+	maxPixels        = 40_000_000 // ~40MP — reject camera dumps that would OOM
+	maxAnimatedThumb = 4 << 20    // animate board cards for GIFs <= 4 MB; larger GIFs animate on detail
 )
 
 // ProcessImage decodes raw image bytes and produces refined variants: full
 // (<=1600px), thumb (<=800px) and small (<=400px) JPEGs, a tiny base64 blur-up
 // placeholder, and the average ("dominant") color for an elegant loading state.
-// Variants are chained (full → thumb → small) to avoid re-resizing the original.
+// Multi-frame animated GIFs preserve their animation alongside static poster/thumb variants.
 func ProcessImage(raw []byte) (*ProcessedImage, error) {
 	// Bound decode work: Config only reads headers for most formats.
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("decode image config: %w", err)
 	}
@@ -42,15 +46,32 @@ func ProcessImage(raw []byte) (*ProcessedImage, error) {
 		return nil, fmt.Errorf("image too large (%dx%d > %d pixels)", cfg.Width, cfg.Height, maxPixels)
 	}
 
+	var animated bool
+	if format == "gif" {
+		if g, err := gif.DecodeAll(bytes.NewReader(raw)); err == nil && len(g.Image) > 1 {
+			animated = true
+		}
+	}
+
 	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
 	}
-	b := img.Bounds()
-	pi := &ProcessedImage{Width: b.Dx(), Height: b.Dy()}
 
 	// Largest first, then derive smaller steps from the already-resized image.
+	// Record the stored full variant's true dimensions so width/height attributes,
+	// srcset descriptors, and "expand full size" reflect the actual served image.
 	full := imaging.Fit(img, fullMax, fullMax, imaging.Lanczos)
+	fb := full.Bounds()
+	pi := &ProcessedImage{
+		Width:    fb.Dx(),
+		Height:   fb.Dy(),
+		Animated: animated,
+	}
+	if animated {
+		pi.Width, pi.Height = img.Bounds().Dx(), img.Bounds().Dy()
+		pi.AnimatedGIF = raw
+	}
 	if pi.FullJPEG, err = encodeJPEG(full, 82); err != nil {
 		return nil, err
 	}

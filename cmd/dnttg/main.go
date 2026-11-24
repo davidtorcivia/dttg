@@ -74,6 +74,8 @@ func main() {
 		run(func(st *store.Store) error { return reconcile(ctx, st, mustMedia(cfg)) })
 	case "backfill-variants":
 		run(func(st *store.Store) error { return backfillVariants(ctx, st, mustMedia(cfg)) })
+	case "refresh-tweets":
+		run(func(st *store.Store) error { return refreshTweets(ctx, st, mustMedia(cfg)) })
 	case "backup":
 		if !cfg.BackupsEnabled() {
 			log.Fatal("backups not configured (set R2_* and R2_BACKUP_BUCKET)")
@@ -94,7 +96,7 @@ func main() {
 	case "token":
 		run(func(st *store.Store) error { return runToken(ctx, st, os.Args[2:]) })
 	default:
-		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|backup|reset-content|set-password|token)", cmd)
+		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|refresh-tweets|backup|reset-content|set-password|token)", cmd)
 	}
 }
 
@@ -231,7 +233,11 @@ func setPassword(ctx context.Context, st *store.Store) error {
 	if err := st.SetSetting(ctx, "password_hash", hash); err != nil {
 		return err
 	}
-	fmt.Println("password updated")
+	// Invalidate all existing sessions so previously logged-in devices must re-authenticate.
+	if err := st.DeleteAllSessions(ctx); err != nil {
+		return err
+	}
+	fmt.Println("password updated (all existing sessions revoked)")
 	return nil
 }
 

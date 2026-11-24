@@ -7,20 +7,33 @@
 <body>
   {{template "sysheader" .}}
   <main id="maincontent" tabindex="-1">
-  <div class="admin admin-form">
-    <h1>Edit item {{pad3 .Item.ID}}</h1>
+  <div class="admin admin-form admin-edit-page">
+    <div class="admin-head">
+      <h1>Edit plate {{pad3 .Item.ID}}</h1>
+      <a class="back-inline" href="{{.Item.DetailURL}}">View plate &rarr;</a>
+    </div>
     {{template "flash" .}}
     <div class="edit-layout">
       <div class="edit-preview">
         {{- if .Item.ThumbURL}}<img src="{{.Item.ThumbURL}}" alt="">
         {{- else if eq .Item.Kind "text"}}<div class="detail-text">{{.Item.Note}}</div>{{end}}
-        <p class="muted">{{.Item.Kind}} · {{longDate .Item.CreatedAt}}</p>
+        <p class="muted">{{.Item.Kind}}{{if .Item.MultiImage}} · {{.Item.GalleryCount}} images{{end}} · {{longDate .Item.CreatedAt}}</p>
         {{- if .Item.SourceURL}}<p class="muted"><a href="{{.Item.SourceURL}}" target="_blank" rel="noopener">{{.Item.SourceURL}}</a></p>{{end}}
+        {{- if isTweetURL .Item.SourceURL}}
+        <form class="refresh-tweet-form" method="POST" action="/admin/items/{{.Item.ID}}/refresh-tweet">
+          {{template "csrf" .}}
+          <button type="submit" class="btn-subtle">Re-fetch tweet photos</button>
+        </form>
+        {{- end}}
         {{- if ne .Item.Kind "text"}}
         <form class="replace-media" method="POST" action="/admin/items/{{.Item.ID}}/media" enctype="multipart/form-data">
           {{template "csrf" .}}
-          <label>Replace file <span>(image, document, or video)</span></label>
-          <input type="file" name="file" accept="image/*,application/pdf,video/*" required>
+          <label>Replace media <span>(replaces all files on this plate)</span></label>
+          <span class="file-field">
+            <span class="file-btn">Choose</span>
+            <span class="file-name" data-file-name>No file chosen</span>
+            <input type="file" name="file" multiple accept="image/*,application/pdf,video/*" required>
+          </span>
           <button type="submit">Upload &amp; replace</button>
         </form>
         {{- end}}
@@ -52,6 +65,79 @@
         <div class="form-actions"><button type="submit">Save</button> <a href="/admin">Cancel</a></div>
       </form>
     </div>
+
+    {{- if or (eq .Item.Kind "image") (gt (len .Item.Images) 0)}}
+    <section class="settings-section edit-gallery-section" aria-label="Series images">
+      <h2>Images ({{len .Item.Images}})</h2>
+      <p class="muted">Drag cards to reorder (position 01 is the cover), edit captions, remove individual plates, or append more images.</p>
+      {{- if .Item.Images}}
+      {{- $total := len .Item.Images}}
+      <div class="edit-gallery-grid" id="edit-gallery-grid" data-reorder-url="/admin/items/{{.Item.ID}}/images/reorder" data-csrf="{{.CSRFToken}}">
+        {{- range $i, $img := .Item.Images}}
+        <div class="edit-gallery-card{{if eq $i 0}} is-cover{{end}}"{{if $img.ID}} draggable="true" data-img-id="{{$img.ID}}"{{end}}>
+          <div class="edit-gallery-thumb">
+            <img src="{{$img.ThumbURL}}" alt="{{$img.Alt}}" loading="lazy" draggable="false">
+            <span class="edit-gallery-pos">{{pad2 (add $i 1)}}{{if eq $i 0}} · COVER{{end}}</span>
+            {{- if and $img.ID (gt $total 1)}}<span class="edit-gallery-grip" aria-hidden="true" title="Drag to reorder">&#8942;&#8942;</span>{{end}}
+          </div>
+          {{- if $img.ID}}
+          <form class="edit-gallery-alt" method="POST" action="/admin/items/{{$.Item.ID}}/images/{{$img.ID}}/alt">
+            {{template "csrf" $}}
+            <input type="text" name="alt" value="{{$img.Alt}}" placeholder="Caption / alt…" aria-label="Caption for image {{add $i 1}}">
+            <button type="submit" title="Save caption">Save</button>
+          </form>
+          <div class="edit-gallery-actions">
+            {{- if gt $i 0}}
+            <form method="POST" action="/admin/items/{{$.Item.ID}}/images/{{$img.ID}}/move">
+              {{template "csrf" $}}<input type="hidden" name="dir" value="left">
+              <button type="submit" title="Move left" aria-label="Move image {{add $i 1}} left">&larr;</button>
+            </form>
+            {{- end}}
+            {{- if lt (add $i 1) $total}}
+            <form method="POST" action="/admin/items/{{$.Item.ID}}/images/{{$img.ID}}/move">
+              {{template "csrf" $}}<input type="hidden" name="dir" value="right">
+              <button type="submit" title="Move right" aria-label="Move image {{add $i 1}} right">&rarr;</button>
+            </form>
+            {{- end}}
+            {{- if gt $i 0}}
+            <form method="POST" action="/admin/items/{{$.Item.ID}}/images/{{$img.ID}}/move">
+              {{template "csrf" $}}<input type="hidden" name="dir" value="first">
+              <button type="submit" title="Make cover">Cover</button>
+            </form>
+            {{- end}}
+            {{- if or (gt $total 1) (ne $.Item.Kind "image")}}
+            <form method="POST" action="/admin/items/{{$.Item.ID}}/images/{{$img.ID}}/delete" data-confirm="Remove image {{add $i 1}} from this post?">
+              {{template "csrf" $}}
+              <button type="submit" class="is-danger" title="Remove image" aria-label="Remove image {{add $i 1}}">&times;</button>
+            </form>
+            {{- end}}
+          </div>
+          {{- end}}
+        </div>
+        {{- end}}
+      </div>
+      {{- end}}
+
+      <form class="add-images-form" method="POST" action="/admin/items/{{.Item.ID}}/images" enctype="multipart/form-data">
+        {{template "csrf" .}}
+        <div class="add-images-row">
+          <div class="form-field">
+            <span class="field-label">Append images <span>(select one or more)</span></span>
+            <span class="file-field">
+              <span class="file-btn">Choose images</span>
+              <span class="file-name" data-file-name>No files chosen</span>
+              <input type="file" name="file" multiple accept="image/*">
+            </span>
+          </div>
+          <label>…or paste an image URL
+            <input type="url" name="image_url" placeholder="https://…/photo.jpg">
+          </label>
+        </div>
+        <div class="form-actions"><button type="submit">+ Add to series</button></div>
+      </form>
+    </section>
+    {{- end}}
+
     <form class="danger" method="POST" action="/admin/items/{{.Item.ID}}/delete" data-confirm="Delete item {{.Item.ID}}? This removes its media too.">
       {{template "csrf" .}}
       <button type="submit">Delete item</button>

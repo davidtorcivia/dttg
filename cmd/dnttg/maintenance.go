@@ -82,3 +82,33 @@ func backfillSmall(ctx context.Context, st *store.Store, ms media.Store, it stor
 	}
 	return st.SetItemSmallKey(ctx, it.ID, key)
 }
+
+// refreshTweets scans all archived tweet items and fetches any additional photos
+// from multi-image tweets that were previously imported as a single photo.
+func refreshTweets(ctx context.Context, st *store.Store, ms media.Store) error {
+	items, err := st.ListItems(ctx, store.ItemFilter{IncludePrivate: true, Cards: true})
+	if err != nil {
+		return err
+	}
+	svc := ingest.New(st, ms)
+	var checked, updated, addedTotal, failed int
+	for _, it := range items {
+		if !ingest.IsTweetURL(it.SourceURL) {
+			continue
+		}
+		checked++
+		n, err := svc.RefreshTweet(ctx, it.ID)
+		if err != nil {
+			log.Printf("item %d (%s): %v", it.ID, it.SourceURL, err)
+			failed++
+			continue
+		}
+		if n > 0 {
+			updated++
+			addedTotal += n
+			log.Printf("item %d: appended %d additional photo(s)", it.ID, n)
+		}
+	}
+	fmt.Printf("refresh-tweets: checked %d tweets, updated %d items (+%d photos, %d errors)\n", checked, updated, addedTotal, failed)
+	return nil
+}

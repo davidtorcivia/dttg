@@ -3,14 +3,16 @@ package web
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"donottouchtheglass/internal/store"
 )
 
 // siteData is hot request-path data that is expensive to re-query on every page:
 // board column count, category lists (public + admin), and the raw tracking
-// snippet (sanitized per request, since the CSP nonce differs). A snapshot is
-// immutable once built; invalidation just drops it.
+// snippet (sanitized per request, since the CSP nonce differs). Snapshots are
+// immutable and read lock-free via atomic.Pointer; only a cache miss serializes
+// on buildMu (so invalidation never stalls behind a slow read).
 type siteData struct {
 	boardColumns int
 	catsPublic   []store.Category
@@ -19,28 +21,30 @@ type siteData struct {
 }
 
 type siteCache struct {
-	mu   sync.Mutex
-	snap *siteData
+	snap    atomic.Pointer[siteData]
+	buildMu sync.Mutex
 }
 
 func (s *Server) siteData(ctx context.Context) *siteData {
-	s.siteCache.mu.Lock()
-	defer s.siteCache.mu.Unlock()
-	if s.siteCache.snap == nil {
-		d := &siteData{boardColumns: 3}
-		if v, _ := s.store.GetSetting(ctx, "board_columns"); v == "4" {
-			d.boardColumns = 4
-		}
-		d.catsPublic, _ = s.store.ListCategories(ctx, false)
-		d.catsAdmin, _ = s.store.ListCategories(ctx, true)
-		d.tracking, _ = s.store.GetSetting(ctx, "tracking_script")
-		s.siteCache.snap = d
+	if d := s.siteCache.snap.Load(); d != nil {
+		return d
 	}
-	return s.siteCache.snap
+	s.siteCache.buildMu.Lock()
+	defer s.siteCache.buildMu.Unlock()
+	if d := s.siteCache.snap.Load(); d != nil {
+		return d
+	}
+	d := &siteData{boardColumns: 3}
+	if v, _ := s.store.GetSetting(ctx, "board_columns"); v == "4" {
+		d.boardColumns = 4
+	}
+	d.catsPublic, _ = s.store.ListCategories(ctx, false)
+	d.catsAdmin, _ = s.store.ListCategories(ctx, true)
+	d.tracking, _ = s.store.GetSetting(ctx, "tracking_script")
+	s.siteCache.snap.Store(d)
+	return d
 }
 
 func (s *Server) invalidateSiteCache() {
-	s.siteCache.mu.Lock()
-	s.siteCache.snap = nil
-	s.siteCache.mu.Unlock()
+	s.siteCache.snap.Store(nil)
 }

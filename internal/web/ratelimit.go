@@ -3,15 +3,17 @@ package web
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	loginMaxFails = 8                // failed attempts allowed within the window
-	loginWindow   = 15 * time.Minute // rolling window for counting failures
-	loginLockout  = 15 * time.Minute // lockout duration once the limit is hit
+	loginMaxFails       = 8                // failed attempts allowed within the window
+	loginWindow         = 15 * time.Minute // rolling window for counting failures
+	loginLockout        = 15 * time.Minute // lockout duration once the limit is hit
+	maxRateLimitEntries = 10_000           // hard memory bound under distributed IP floods
 )
 
 type loginAttempt struct {
@@ -20,16 +22,15 @@ type loginAttempt struct {
 	blockedUntil time.Time
 }
 
-// loginLimiter is a tiny in-memory per-key failed-login throttle. A legitimate
-// admin succeeds on the first try and is never counted; bots get locked out after
-// loginMaxFails failures within loginWindow. Keyed by client IP.
+// loginLimiter is a bounded in-memory per-key failed-login throttle.
 type loginLimiter struct {
 	mu       sync.Mutex
+	max      int
 	attempts map[string]*loginAttempt
 }
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{attempts: map[string]*loginAttempt{}}
+	return &loginLimiter{max: maxRateLimitEntries, attempts: map[string]*loginAttempt{}}
 }
 
 // blocked reports whether key is currently locked out, and the remaining time.
@@ -53,9 +54,16 @@ func (l *loginLimiter) fail(key string) {
 	defer l.mu.Unlock()
 	l.prune(now)
 	a := l.attempts[key]
-	if a == nil || now.Sub(a.first) > loginWindow {
+	if a == nil {
+		if l.max > 0 && len(l.attempts) >= l.max {
+			l.evictOldest()
+		}
 		a = &loginAttempt{first: now}
 		l.attempts[key] = a
+	} else if now.Sub(a.first) > loginWindow {
+		a.fails = 0
+		a.first = now
+		a.blockedUntil = time.Time{}
 	}
 	a.fails++
 	if a.fails >= loginMaxFails {
@@ -70,7 +78,6 @@ func (l *loginLimiter) reset(key string) {
 	delete(l.attempts, key)
 }
 
-// prune drops stale records so the map can't grow without bound (lock held).
 func (l *loginLimiter) prune(now time.Time) {
 	for k, a := range l.attempts {
 		if now.After(a.blockedUntil) && now.Sub(a.first) > loginWindow {
@@ -79,11 +86,23 @@ func (l *loginLimiter) prune(now time.Time) {
 	}
 }
 
-// tokenBucket is a per-key token-bucket limiter. rate is tokens refilled per
-// second; burst is the maximum accumulated tokens (and thus the short spike
-// size). Allow returns false when the key has exhausted its budget.
+func (l *loginLimiter) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, a := range l.attempts {
+		if oldestKey == "" || a.first.Before(oldestTime) {
+			oldestKey, oldestTime = k, a.first
+		}
+	}
+	if oldestKey != "" {
+		delete(l.attempts, oldestKey)
+	}
+}
+
+// tokenBucket is a bounded per-key token-bucket limiter.
 type tokenBucket struct {
 	mu      sync.Mutex
+	max     int
 	rate    float64 // tokens per second
 	burst   float64
 	buckets map[string]*tbEntry
@@ -102,6 +121,7 @@ func newTokenBucket(rate float64, burst int) *tokenBucket {
 		burst = 1
 	}
 	return &tokenBucket{
+		max:     maxRateLimitEntries,
 		rate:    rate,
 		burst:   float64(burst),
 		buckets: map[string]*tbEntry{},
@@ -109,7 +129,7 @@ func newTokenBucket(rate float64, burst int) *tokenBucket {
 }
 
 // allow consumes one token for key when available, else reports how long to
-// wait for the next one (for Retry-After). Thread-safe.
+// wait for the next one (for Retry-After). Thread-safe and memory-bounded.
 func (tb *tokenBucket) allow(key string) (bool, time.Duration) {
 	now := time.Now()
 	tb.mu.Lock()
@@ -118,6 +138,9 @@ func (tb *tokenBucket) allow(key string) (bool, time.Duration) {
 
 	e := tb.buckets[key]
 	if e == nil {
+		if tb.max > 0 && len(tb.buckets) >= tb.max {
+			tb.evictOldest()
+		}
 		e = &tbEntry{tokens: tb.burst, last: now}
 		tb.buckets[key] = e
 	} else {
@@ -142,9 +165,7 @@ func (tb *tokenBucket) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-// prune drops idle buckets (lock held). Idle = full tokens for > 2× fill time.
 func (tb *tokenBucket) prune(now time.Time) {
-	// Fill time to go empty→burst; keep a little extra headroom.
 	idle := time.Duration(tb.burst/tb.rate*2*float64(time.Second)) + time.Minute
 	if idle < 2*time.Minute {
 		idle = 2 * time.Minute
@@ -156,22 +177,44 @@ func (tb *tokenBucket) prune(now time.Time) {
 	}
 }
 
-// clientIP returns the best-effort client IP. Behind a trusted proxy it prefers
-// X-Real-IP (typically set by the edge to the connecting client). If only
-// X-Forwarded-For is present, the right-most entry is used — the immediate
-// client of the trusted proxy after the proxy has stripped inbound XFF.
-// Without TrustProxy, RemoteAddr is used; those headers are spoofable.
+func (tb *tokenBucket) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, e := range tb.buckets {
+		if oldestKey == "" || e.last.Before(oldestTime) {
+			oldestKey, oldestTime = k, e.last
+		}
+	}
+	if oldestKey != "" {
+		delete(tb.buckets, oldestKey)
+	}
+}
+
+// clientIP returns the best-effort client IP. Behind a trusted proxy/tunnel it
+// prefers CF-Connecting-IP (Cloudflare Tunnel's authoritative single client IP),
+// then X-Real-IP, then the right-most X-Forwarded-For entry — validating IP
+// syntax so malformed headers can't poison rate-limit buckets.
 func (s *Server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxy {
+		if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" {
+			if addr, err := netip.ParseAddr(cf); err == nil {
+				return addr.Unmap().String()
+			}
+		}
 		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+			if addr, err := netip.ParseAddr(xr); err == nil {
+				return addr.Unmap().String()
+			}
 			return xr
 		}
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Right-most hop is the client adjacent to the trusted proxy.
 			if i := strings.LastIndexByte(xff, ','); i >= 0 {
 				xff = xff[i+1:]
 			}
 			if ip := strings.TrimSpace(xff); ip != "" {
+				if addr, err := netip.ParseAddr(ip); err == nil {
+					return addr.Unmap().String()
+				}
 				return ip
 			}
 		}

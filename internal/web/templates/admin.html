@@ -12,32 +12,91 @@
       <h1>Archive</h1>
       <a class="btn" href="/admin/new">+ New</a>
     </div>
-    <table class="admin-table">
-      <thead>
-        <tr><th></th><th>ID</th><th>Title</th><th>Kind</th><th>Category</th><th>Status</th><th>Date</th><th></th></tr>
-      </thead>
-      <tbody>
-        {{- range .Items}}
-        <tr>
-          <td class="admin-thumb">{{if .ThumbURL}}<img src="{{.ThumbURL}}" alt="" loading="lazy">{{end}}</td>
-          <td>{{pad3 .ID}}</td>
-          <td><a href="{{.DetailURL}}">{{if .Title}}{{.Title}}{{else}}<em>untitled</em>{{end}}</a></td>
-          <td>{{.Kind}}</td>
-          <td>{{.CategoryName}}</td>
-          <td>{{.Visibility}}</td>
-          <td>{{shortDate .CreatedAt}}</td>
-          <td class="admin-actions">
-            <a href="/admin/items/{{.ID}}/edit">edit</a>
-            <form method="POST" action="/admin/items/{{.ID}}/delete" data-confirm="Delete item {{.ID}}? This removes its media too.">{{template "csrf" $}}<button type="submit">delete</button></form>
-          </td>
-        </tr>
-        {{- else}}
-        <tr><td colspan="8" class="empty">Nothing archived yet.</td></tr>
+    {{template "flash" .}}
+
+    <form class="admin-filters" method="GET" action="/admin" role="search">
+      <input type="search" name="q" placeholder="Filter title, note, tag…" value="{{with .AdminFilter}}{{.Query}}{{end}}" aria-label="Search archive">
+      <select name="vis" aria-label="Visibility">
+        <option value="">All visibility</option>
+        <option value="public"{{if and .AdminFilter (eq .AdminFilter.Visibility "public")}} selected{{end}}>Public</option>
+        <option value="private"{{if and .AdminFilter (eq .AdminFilter.Visibility "private")}} selected{{end}}>Private</option>
+      </select>
+      <select name="kind" aria-label="Kind">
+        <option value="">All kinds</option>
+        <option value="image"{{if and .AdminFilter (eq .AdminFilter.Kind "image")}} selected{{end}}>Image</option>
+        <option value="link"{{if and .AdminFilter (eq .AdminFilter.Kind "link")}} selected{{end}}>Link</option>
+        <option value="embed"{{if and .AdminFilter (eq .AdminFilter.Kind "embed")}} selected{{end}}>Embed / Video</option>
+        <option value="document"{{if and .AdminFilter (eq .AdminFilter.Kind "document")}} selected{{end}}>Document</option>
+        <option value="text"{{if and .AdminFilter (eq .AdminFilter.Kind "text")}} selected{{end}}>Text</option>
+      </select>
+      <select name="cat" aria-label="Category">
+        <option value="">All categories</option>
+        {{- range .Categories}}
+        <option value="{{.Slug}}"{{if and $.AdminFilter (eq $.AdminFilter.Category .Slug)}} selected{{end}}>{{.Name}}</option>
         {{- end}}
-      </tbody>
-    </table>
+      </select>
+      <button type="submit" class="btn-subtle">Filter</button>
+      {{- if and .AdminFilter .AdminFilter.Active}}
+      <a href="/admin" class="filter-clear">Clear</a>
+      {{- end}}
+    </form>
+
+    <form id="bulk-form" class="bulk-bar" method="POST" action="/admin/items/bulk" hidden>
+      {{template "csrf" .}}
+      <span class="bulk-count" id="bulk-count">0 selected</span>
+      <select name="action" id="bulk-action" aria-label="Bulk action" required>
+        <option value="">Bulk action…</option>
+        <option value="public">Make public</option>
+        <option value="private">Make private</option>
+        <option value="category">Set category</option>
+        <option value="tags">Add tags</option>
+        <option value="delete">Delete selected</option>
+      </select>
+      <input type="text" name="bulk_category" id="bulk-category" list="bulk-cats" placeholder="Category (blank clears)" hidden>
+      <datalist id="bulk-cats">{{range .Categories}}<option value="{{.Name}}">{{end}}</datalist>
+      <input type="text" name="bulk_tags" id="bulk-tags" placeholder="tag1, tag2" hidden>
+      <button type="submit" class="btn">Apply</button>
+    </form>
+
+    <div class="table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th class="col-check"><input type="checkbox" id="bulk-all" aria-label="Select all"></th>
+            <th></th><th>ID</th><th>Title</th><th>Kind</th><th>Category</th><th>Status</th><th>Date</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{- range .Items}}
+          <tr>
+            <td class="col-check"><input type="checkbox" class="bulk-check" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select item {{.ID}}"></td>
+            <td class="admin-thumb">
+              {{- if .ThumbURL}}
+              <span class="admin-thumb-wrap">
+                <img src="{{.ThumbURL}}" alt="" loading="lazy">
+                {{- if .MultiImage}}<span class="admin-thumb-count">&times;{{.GalleryCount}}</span>{{end}}
+              </span>
+              {{- end}}
+            </td>
+            <td class="num">{{pad3 .ID}}</td>
+            <td><a href="{{.DetailURL}}">{{if .Title}}{{.Title}}{{else}}<em>untitled</em>{{end}}</a></td>
+            <td>{{.Kind}}{{if .MultiImage}} ({{.GalleryCount}}){{end}}</td>
+            <td>{{.CategoryName}}</td>
+            <td><span class="status-pill{{if eq .Visibility "private"}} is-private{{end}}">{{.Visibility}}</span></td>
+            <td class="num">{{shortDate .CreatedAt}}</td>
+            <td class="admin-actions">
+              <a href="/admin/items/{{.ID}}/edit">edit</a>
+              <form method="POST" action="/admin/items/{{.ID}}/delete" data-confirm="Delete item {{.ID}}? This removes its media too.">{{template "csrf" $}}<button type="submit">delete</button></form>
+            </td>
+          </tr>
+          {{- else}}
+          <tr><td colspan="9" class="empty">Nothing matches.</td></tr>
+          {{- end}}
+        </tbody>
+      </table>
+    </div>
     {{- if and (not .BoardDone) .CursorID}}
-    <p class="admin-more"><a class="btn" href="/admin?cursor={{.CursorCreated}}:{{.CursorID}}">Load more</a></p>
+    <p class="admin-more"><a class="btn" href="/admin?{{if .AdminFilter}}{{.AdminFilter.QueryString .CursorCreated .CursorID}}{{else}}cursor={{.CursorCreated}}:{{.CursorID}}{{end}}">Load more</a></p>
     {{- end}}
   </div>
   </main>

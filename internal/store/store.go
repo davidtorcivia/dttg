@@ -9,6 +9,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -20,33 +21,61 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db  *sql.DB // writer pool (1 connection: eliminates SQLITE_BUSY writer contention)
+	rdb *sql.DB // concurrent read-only pool (WAL readers don't block on writes/backups)
+}
 
-// Open connects to the SQLite database, applies pragmas, and runs migrations.
+// Open connects to the SQLite database, applies pragmas, runs migrations, and
+// opens a separate read-only pool for concurrent WAL reads.
 func Open(path string) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" +
-		"&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)"
+		"&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)" +
+		"&_pragma=cache_size(-16000)&_pragma=temp_store(MEMORY)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	// Single-user app: serialize access to dodge writer-lock contention entirely.
-	// Every helper must therefore drain/close its rows before issuing another query.
 	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, rdb: db}
 	if err := s.migrate(); err != nil {
+		_ = db.Close()
 		return nil, err
+	}
+	// Open a concurrent read-only pool on file-backed DBs so GET traffic never
+	// stalls behind uploads or VACUUM INTO backups.
+	if path != "" && path != ":memory:" && !strings.HasPrefix(path, "file::memory:") {
+		rdsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(ON)" +
+			"&_pragma=cache_size(-16000)&_pragma=temp_store(MEMORY)"
+		if rdb, err := sql.Open("sqlite", rdsn); err == nil {
+			rdb.SetMaxOpenConns(4)
+			if err := rdb.Ping(); err == nil {
+				s.rdb = rdb
+			} else {
+				_ = rdb.Close()
+			}
+		}
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	var err error
+	if s.rdb != nil && s.rdb != s.db {
+		err = s.rdb.Close()
+	}
+	if e := s.db.Close(); err == nil {
+		err = e
+	}
+	return err
+}
 
 // Ping verifies database connectivity (used by the readiness probe).
-func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+func (s *Store) Ping(ctx context.Context) error { return s.rdb.PingContext(ctx) }
 
 // BackupTo writes a consistent snapshot of the database to path via VACUUM INTO.
 // path is server-controlled (single quotes are escaped defensively).
@@ -179,7 +208,7 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	var v string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	err := s.rdb.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -204,7 +233,7 @@ func (s *Store) CreateSession(ctx context.Context, id string, ttl time.Duration)
 
 func (s *Store) SessionValid(ctx context.Context, id string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := s.rdb.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions WHERE id=? AND expires_at > unixepoch()`, id).Scan(&n)
 	return n > 0, err
 }
@@ -212,6 +241,28 @@ func (s *Store) SessionValid(ctx context.Context, id string) (bool, error) {
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, id)
 	return err
+}
+
+// DeleteAllSessions invalidates every session (used on password reset).
+func (s *Store) DeleteAllSessions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions`)
+	return err
+}
+
+// DeleteOtherSessions revokes every session except keepHash.
+func (s *Store) DeleteOtherSessions(ctx context.Context, keepHash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id != ?`, keepHash)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// CountActiveSessions returns the number of non-expired admin sessions.
+func (s *Store) CountActiveSessions(ctx context.Context) (int, error) {
+	var n int
+	err := s.rdb.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE expires_at > unixepoch()`).Scan(&n)
+	return n, err
 }
 
 // PurgeExpiredSessions removes sessions past their expiry (run periodically).
@@ -253,7 +304,7 @@ type APIToken struct {
 
 // ListTokens returns all API tokens, newest first.
 func (s *Store) ListTokens(ctx context.Context) ([]APIToken, error) {
-	return queryAll(ctx, s.db, func(sc rowScanner) (APIToken, error) {
+	return queryAll(ctx, s.rdb, func(sc rowScanner) (APIToken, error) {
 		var t APIToken
 		var created int64
 		var last sql.NullInt64
@@ -305,7 +356,7 @@ type Tag struct {
 // categories that hold at least one public item, so private-only category names
 // never leak into the nav or sitemap.
 func (s *Store) ListCategories(ctx context.Context, includePrivate bool) ([]Category, error) {
-	return queryAll(ctx, s.db, func(sc rowScanner) (Category, error) {
+	return queryAll(ctx, s.rdb, func(sc rowScanner) (Category, error) {
 		var c Category
 		return c, sc.Scan(&c.ID, &c.Slug, &c.Name, &c.Description, &c.Position, &c.Count)
 	}, `SELECT c.id, c.slug, c.name, c.description, c.position,
@@ -352,7 +403,7 @@ func attachTags(ctx context.Context, tx *sql.Tx, itemID int64, names []string) e
 // ListTags returns tags, most-used first (then alphabetical). Public callers only
 // see tags attached to at least one public item.
 func (s *Store) ListTags(ctx context.Context, includePrivate bool) ([]Tag, error) {
-	return queryAll(ctx, s.db, scanTag, `
+	return queryAll(ctx, s.rdb, scanTag, `
 		SELECT t.id, t.slug, t.name FROM tags t
 		LEFT JOIN item_tags it ON it.tag_id = t.id
 		LEFT JOIN items i ON i.id = it.item_id AND (?1 OR i.visibility='public')
@@ -392,6 +443,21 @@ func Slugify(s string) string {
 
 // ---------- items ----------
 
+type ItemImage struct {
+	ID            int64
+	ItemID        int64
+	Position      int
+	CoverKey      string
+	ThumbKey      string
+	SmallKey      string
+	Placeholder   string
+	DominantColor string
+	Width         int
+	Height        int
+	Alt           string
+	CreatedAt     time.Time
+}
+
 type Item struct {
 	ID              int64
 	Kind            string // image | link | text | embed | document
@@ -419,10 +485,13 @@ type Item struct {
 	DominantColor   string
 	Width           int
 	Height          int
+	ImageCount      int
+	ContentHash     string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	PublishedAt     *time.Time
 	Tags            []Tag
+	Images          []ItemImage
 }
 
 const itemColumns = `
@@ -430,6 +499,7 @@ const itemColumns = `
 	COALESCE(i.category_id,0), COALESCE(c.slug,''), COALESCE(c.name,''),
 	i.link_title, i.link_description, i.link_site_name, i.embed_provider, i.embed_html,
 	i.cover_remote_url, i.cover_key, i.thumb_key, i.small_key, i.placeholder, i.dominant_color, i.width, i.height,
+	i.image_count, i.content_hash,
 	i.created_at, i.updated_at, i.published_at,
 	i.file_key, i.file_name, i.file_mime, i.file_size`
 
@@ -448,6 +518,7 @@ func scanItem(sc rowScanner) (Item, error) {
 		&it.CategoryID, &it.CategorySlug, &it.CategoryName,
 		&it.LinkTitle, &it.LinkDescription, &it.LinkSiteName, &it.EmbedProvider, &it.EmbedHTML,
 		&it.CoverRemoteURL, &it.CoverKey, &it.ThumbKey, &it.SmallKey, &it.Placeholder, &it.DominantColor, &it.Width, &it.Height,
+		&it.ImageCount, &it.ContentHash,
 		&createdAt, &updatedAt, &published,
 		&it.FileKey, &it.FileName, &it.FileMime, &it.FileSize)
 	it.CreatedAt, it.UpdatedAt = unixUTC(createdAt), unixUTC(updatedAt)
@@ -458,11 +529,27 @@ func scanItem(sc rowScanner) (Item, error) {
 	return it, err
 }
 
+func scanItemImage(sc rowScanner) (ItemImage, error) {
+	var img ItemImage
+	var createdAt int64
+	err := sc.Scan(&img.ID, &img.ItemID, &img.Position, &img.CoverKey, &img.ThumbKey, &img.SmallKey,
+		&img.Placeholder, &img.DominantColor, &img.Width, &img.Height, &img.Alt, &createdAt)
+	img.CreatedAt = unixUTC(createdAt)
+	return img, err
+}
+
+const itemImageSelect = `SELECT id, item_id, position, cover_key, thumb_key, small_key,
+	placeholder, dominant_color, width, height, alt, created_at FROM item_images `
+
 type ItemFilter struct {
 	IncludePrivate bool
 	Cards          bool // card projection (see itemCardColumns)
 	CategorySlug   string
 	TagSlug        string
+	Kind           string // optional filter: image|link|text|embed|document
+	Visibility     string // optional explicit filter: public|private (admin)
+	Query          string // optional text search filter (admin)
+	Color          string // optional palette bucket: red|orange|yellow|green|blue|violet|light|neutral|dark
 	Limit          int
 	// Keyset cursor: when both set, return items strictly older than (BeforeCreated, BeforeID).
 	BeforeCreated int64
@@ -478,7 +565,12 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 	}
 	where := []string{"1"}
 	var args []any
-	if !f.IncludePrivate {
+	switch {
+	case f.Visibility == "public":
+		where = append(where, "i.visibility='public'")
+	case f.Visibility == "private" && f.IncludePrivate:
+		where = append(where, "i.visibility='private'")
+	case !f.IncludePrivate:
 		where = append(where, "i.visibility='public'")
 	}
 	if f.CategorySlug != "" {
@@ -489,37 +581,158 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 		where = append(where, `i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id = it.tag_id WHERE t.slug = ?)`)
 		args = append(args, f.TagSlug)
 	}
+	if f.Kind != "" {
+		where = append(where, "i.kind = ?")
+		args = append(args, f.Kind)
+	}
+	if f.Color != "" {
+		where = append(where, "i.dominant_color != ''")
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		like := "%" + likeEscaper.Replace(strings.ToLower(q)) + "%"
+		if match := ftsQuery(q); match != "" {
+			where = append(where, `(lower(c.name) LIKE ? ESCAPE '\' OR i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id=it.tag_id WHERE lower(t.name) LIKE ? ESCAPE '\') OR i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?))`)
+			args = append(args, like, like, match)
+		} else {
+			where = append(where, `(lower(i.title) LIKE ? ESCAPE '\' OR lower(i.note) LIKE ? ESCAPE '\' OR lower(i.source_url) LIKE ? ESCAPE '\')`)
+			args = append(args, like, like, like)
+		}
+	}
 	if f.BeforeCreated > 0 && f.BeforeID > 0 {
 		where = append(where, `(i.created_at < ? OR (i.created_at = ? AND i.id < ?))`)
 		args = append(args, f.BeforeCreated, f.BeforeCreated, f.BeforeID)
 	}
 	q := `SELECT` + cols + itemFrom + ` WHERE ` + strings.Join(where, " AND ") + ` ORDER BY i.created_at DESC, i.id DESC`
-	if f.Limit > 0 {
+	// Color filtering runs in Go over HSL buckets; scan without SQL LIMIT then slice to f.Limit.
+	if f.Limit > 0 && f.Color == "" {
 		q += " LIMIT ? OFFSET ?"
 		args = append(args, f.Limit, f.Offset)
 	}
-	return queryAll(ctx, s.db, scanItem, q, args...)
+	items, err := queryAll(ctx, s.rdb, scanItem, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	if f.Color != "" {
+		filtered := make([]Item, 0, len(items))
+		for _, it := range items {
+			if ColorBucket(it.DominantColor) == f.Color {
+				filtered = append(filtered, it)
+				if f.Limit > 0 && len(filtered) >= f.Limit {
+					break
+				}
+			}
+		}
+		items = filtered
+	}
+	if err := s.attachMultiImages(ctx, items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// attachMultiImages batch-loads item_images for any items in the slice that have
+// more than one image, in a single IN query (zero extra queries on single-image pages).
+func (s *Store) attachMultiImages(ctx context.Context, items []Item) error {
+	var ids []any
+	var placeholders []string
+	idxByID := map[int64]int{}
+	for i := range items {
+		if items[i].ImageCount > 1 {
+			ids = append(ids, items[i].ID)
+			placeholders = append(placeholders, "?")
+			idxByID[items[i].ID] = i
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	imgs, err := queryAll(ctx, s.rdb, scanItemImage,
+		itemImageSelect+`WHERE item_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY item_id, position ASC, id ASC`, ids...)
+	if err != nil {
+		return err
+	}
+	for _, img := range imgs {
+		if idx, ok := idxByID[img.ItemID]; ok {
+			items[idx].Images = append(items[idx].Images, img)
+		}
+	}
+	return nil
+}
+
+// RandomItemID returns the id of a random item (respecting visibility), or 0 if empty.
+func (s *Store) RandomItemID(ctx context.Context, includePrivate bool) (int64, error) {
+	var id int64
+	err := s.rdb.QueryRowContext(ctx,
+		`SELECT id FROM items WHERE ? OR visibility='public' ORDER BY RANDOM() LIMIT 1`, includePrivate).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
+// FindDuplicate returns the newest existing item matching contentHash (if non-empty)
+// or sourceURL (if non-empty), or (nil, nil) if none matches.
+func (s *Store) FindDuplicate(ctx context.Context, sourceURL, contentHash string) (*Item, error) {
+	sourceURL = strings.TrimSpace(sourceURL)
+	contentHash = strings.TrimSpace(contentHash)
+	if contentHash != "" {
+		it, err := queryOne(s.rdb.QueryRowContext(ctx,
+			`SELECT`+itemCardColumns+itemFrom+` WHERE i.content_hash = ? ORDER BY i.id DESC LIMIT 1`, contentHash), scanItem)
+		if err != nil || it != nil {
+			return it, err
+		}
+	}
+	if sourceURL != "" {
+		return queryOne(s.rdb.QueryRowContext(ctx,
+			`SELECT`+itemCardColumns+itemFrom+` WHERE i.source_url = ? ORDER BY i.id DESC LIMIT 1`, sourceURL), scanItem)
+	}
+	return nil, nil
 }
 
 func (s *Store) CountItems(ctx context.Context, includePrivate bool) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE ? OR visibility='public'`, includePrivate).Scan(&n)
+	err := s.rdb.QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE ? OR visibility='public'`, includePrivate).Scan(&n)
 	return n, err
 }
 
 // ItemMediaKeys is a minimal projection for broken-item detection.
 type ItemMediaKeys struct {
-	ID       int64
-	CoverKey string
-	FileKey  string
+	ID             int64
+	CoverKey       string
+	FileKey        string
+	ImageCoverKeys []string
 }
 
-// ListItemMediaKeys returns id/cover/file keys for every item.
+// ListItemMediaKeys returns id/cover/file/gallery keys for every item.
 func (s *Store) ListItemMediaKeys(ctx context.Context) ([]ItemMediaKeys, error) {
-	return queryAll(ctx, s.db, func(sc rowScanner) (ItemMediaKeys, error) {
+	keys, err := queryAll(ctx, s.rdb, func(sc rowScanner) (ItemMediaKeys, error) {
 		var k ItemMediaKeys
 		return k, sc.Scan(&k.ID, &k.CoverKey, &k.FileKey)
 	}, `SELECT id, cover_key, file_key FROM items`)
+	if err != nil {
+		return nil, err
+	}
+	type imgKey struct {
+		itemID   int64
+		coverKey string
+	}
+	extra, err := queryAll(ctx, s.rdb, func(sc rowScanner) (imgKey, error) {
+		var ik imgKey
+		return ik, sc.Scan(&ik.itemID, &ik.coverKey)
+	}, `SELECT item_id, cover_key FROM item_images WHERE cover_key != '' ORDER BY item_id, position ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]int, len(keys))
+	for i := range keys {
+		byID[keys[i].ID] = i
+	}
+	for _, ik := range extra {
+		if idx, ok := byID[ik.itemID]; ok {
+			keys[idx].ImageCoverKeys = append(keys[idx].ImageCoverKeys, ik.coverKey)
+		}
+	}
+	return keys, nil
 }
 
 // ftsQuery turns a user query into a safe FTS5 MATCH expression: alphanumeric
@@ -561,9 +774,10 @@ func (s *Store) SearchItems(ctx context.Context, f SearchFilter) ([]Item, error)
 		i.id IN (SELECT it.item_id FROM item_tags it JOIN tags t ON t.id=it.tag_id WHERE lower(t.name) LIKE ? ESCAPE '\') OR %s)
 		ORDER BY i.created_at DESC, i.id DESC LIMIT ?`
 	if match := ftsQuery(f.Query); match != "" {
-		items, err := queryAll(ctx, s.db, scanItem, fmt.Sprintf(q, `i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)`),
+		items, err := queryAll(ctx, s.rdb, scanItem, fmt.Sprintf(q, `i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)`),
 			f.IncludePrivate, like, like, match, f.Limit)
 		if err == nil {
+			_ = s.attachMultiImages(ctx, items)
 			return items, nil
 		}
 	}
@@ -573,19 +787,28 @@ func (s *Store) SearchItems(ctx context.Context, f SearchFilter) ([]Item, error)
 		cols[i] = "lower(" + c + `) LIKE ? ESCAPE '\'`
 		args = append(args, like)
 	}
-	return queryAll(ctx, s.db, scanItem, fmt.Sprintf(q, strings.Join(cols, " OR ")), append(args, f.Limit)...)
+	items, err := queryAll(ctx, s.rdb, scanItem, fmt.Sprintf(q, strings.Join(cols, " OR ")), append(args, f.Limit)...)
+	if err == nil {
+		_ = s.attachMultiImages(ctx, items)
+	}
+	return items, err
 }
 
-// GetItem returns a single item with its tags. Returns (nil, nil) when not found
-// or when the item is private and includePrivate is false.
+// GetItem returns a single item with its tags and gallery images. Returns
+// (nil, nil) when not found or when the item is private and includePrivate is false.
 func (s *Store) GetItem(ctx context.Context, id int64, includePrivate bool) (*Item, error) {
-	it, err := queryOne(s.db.QueryRowContext(ctx, `SELECT`+itemColumns+itemFrom+
+	it, err := queryOne(s.rdb.QueryRowContext(ctx, `SELECT`+itemColumns+itemFrom+
 		` WHERE i.id = ? AND (? OR i.visibility='public')`, id, includePrivate), scanItem)
 	if it == nil || err != nil {
 		return nil, err
 	}
-	it.Tags, err = queryAll(ctx, s.db, scanTag, `SELECT t.id, t.slug, t.name FROM tags t
+	it.Tags, err = queryAll(ctx, s.rdb, scanTag, `SELECT t.id, t.slug, t.name FROM tags t
 		JOIN item_tags it ON it.tag_id = t.id WHERE it.item_id = ? ORDER BY t.name`, id)
+	if err != nil {
+		return nil, err
+	}
+	it.Images, err = queryAll(ctx, s.rdb, scanItemImage,
+		itemImageSelect+`WHERE item_id = ? ORDER BY position ASC, id ASC`, id)
 	return it, err
 }
 
@@ -598,6 +821,14 @@ func insertItem(ctx context.Context, ex execer, it Item) (int64, error) {
 		created = it.CreatedAt.Unix()
 	}
 	it.Visibility = visibility(it.Visibility)
+	imgCount := it.ImageCount
+	if imgCount == 0 {
+		if len(it.Images) > 0 {
+			imgCount = len(it.Images)
+		} else if it.CoverKey != "" || it.CoverRemoteURL != "" {
+			imgCount = 1
+		}
+	}
 	var published any
 	switch {
 	case it.PublishedAt != nil:
@@ -608,13 +839,13 @@ func insertItem(ctx context.Context, ex execer, it Item) (int64, error) {
 	res, err := ex.ExecContext(ctx, `INSERT INTO items
 		(kind,title,note,source_url,visibility,category_id,
 		 link_title,link_description,link_site_name,embed_provider,embed_html,
-		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,
+		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,image_count,content_hash,
 		 file_key,file_name,file_mime,file_size,
 		 created_at,updated_at,published_at)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
 		it.Kind, it.Title, it.Note, it.SourceURL, it.Visibility, nullID(it.CategoryID),
 		it.LinkTitle, it.LinkDescription, it.LinkSiteName, it.EmbedProvider, it.EmbedHTML,
-		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Width, it.Height,
+		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Width, it.Height, imgCount, it.ContentHash,
 		it.FileKey, it.FileName, it.FileMime, it.FileSize,
 		created, now, published)
 	if err != nil {
@@ -623,16 +854,46 @@ func insertItem(ctx context.Context, ex execer, it Item) (int64, error) {
 	return res.LastInsertId()
 }
 
+func insertItemImages(ctx context.Context, tx *sql.Tx, itemID int64, imgs []ItemImage) error {
+	for i, img := range imgs {
+		pos := img.Position
+		if pos == 0 && i > 0 {
+			pos = i
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO item_images
+			(item_id,position,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,alt)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			itemID, pos, img.CoverKey, img.ThumbKey, img.SmallKey, img.Placeholder,
+			img.DominantColor, img.Width, img.Height, img.Alt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateItem inserts a bare item (no media or tags).
 func (s *Store) CreateItem(ctx context.Context, it Item) (int64, error) {
 	return s.CreateItemWithMediaAndTags(ctx, it, nil, nil)
 }
 
-// CreateItemWithMediaAndTags inserts an item, its media rows, and tags in one
-// transaction (the kind/visibility CHECK constraints reject bad values).
+// CreateItemWithMediaAndTags inserts an item, its media rows, gallery images,
+// and tags in one transaction (the kind/visibility CHECK constraints reject bad values).
 func (s *Store) CreateItemWithMediaAndTags(ctx context.Context, it Item, media []Media, tags []string) (id int64, err error) {
+	imgs := it.Images
+	if len(imgs) == 0 && it.CoverKey != "" {
+		imgs = []ItemImage{{
+			Position: 0, CoverKey: it.CoverKey, ThumbKey: it.ThumbKey, SmallKey: it.SmallKey,
+			Placeholder: it.Placeholder, DominantColor: it.DominantColor, Width: it.Width, Height: it.Height,
+		}}
+	}
+	if len(imgs) > 0 {
+		it.ImageCount = len(imgs)
+	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		if id, err = insertItem(ctx, tx, it); err != nil {
+			return err
+		}
+		if err := insertItemImages(ctx, tx, id, imgs); err != nil {
 			return err
 		}
 		if err := insertMedia(ctx, tx, id, media); err != nil {
@@ -675,38 +936,364 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, e ItemEdit) error {
 	})
 }
 
-// ReplaceItemMedia swaps an item's media rows and media columns in one
-// transaction (used when the owner uploads a replacement file).
+// ReplaceItemMedia swaps an item's media rows, gallery images, and media columns
+// in one transaction (used when the owner uploads replacement file(s)).
 func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, media []Media) error {
+	imgs := next.Images
+	if len(imgs) == 0 && next.CoverKey != "" {
+		imgs = []ItemImage{{
+			Position: 0, CoverKey: next.CoverKey, ThumbKey: next.ThumbKey, SmallKey: next.SmallKey,
+			Placeholder: next.Placeholder, DominantColor: next.DominantColor, Width: next.Width, Height: next.Height,
+		}}
+	}
+	imgCount := len(imgs)
+	if imgCount == 0 && next.CoverRemoteURL != "" {
+		imgCount = 1
+	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM media WHERE item_id=?`, itemID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM item_images WHERE item_id=?`, itemID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE items SET
 				kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, small_key=?, placeholder=?,
-				dominant_color=?, width=?, height=?,
+				dominant_color=?, width=?, height=?, image_count=?,
 				file_key=?, file_name=?, file_mime=?, file_size=?,
 				embed_provider=?, embed_html=?,
 				updated_at=unixepoch()
 			WHERE id=?`,
 			next.Kind, next.CoverRemoteURL, next.CoverKey, next.ThumbKey, next.SmallKey, next.Placeholder,
-			next.DominantColor, next.Width, next.Height,
+			next.DominantColor, next.Width, next.Height, imgCount,
 			next.FileKey, next.FileName, next.FileMime, next.FileSize,
 			next.EmbedProvider, next.EmbedHTML, itemID); err != nil {
+			return err
+		}
+		if err := insertItemImages(ctx, tx, itemID, imgs); err != nil {
 			return err
 		}
 		return insertMedia(ctx, tx, itemID, media)
 	})
 }
 
-// SetItemSmallKey sets just the small (400px) variant key (used by the backfill).
-func (s *Store) SetItemSmallKey(ctx context.Context, id int64, key string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE items SET small_key=? WHERE id=?`, key, id)
+// syncItemCover updates an item's cached cover columns and image_count to match
+// its current item_images rows (position 0 becomes the cover).
+func syncItemCover(ctx context.Context, tx *sql.Tx, itemID int64) error {
+	rows, err := tx.QueryContext(ctx, itemImageSelect+`WHERE item_id=? ORDER BY position ASC, id ASC`, itemID)
+	if err != nil {
+		return err
+	}
+	var imgs []ItemImage
+	for rows.Next() {
+		img, err := scanItemImage(rows)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		imgs = append(imgs, img)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i, img := range imgs {
+		if img.Position != i {
+			if _, err := tx.ExecContext(ctx, `UPDATE item_images SET position=? WHERE id=?`, i, img.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if len(imgs) == 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE items SET
+			cover_key='', thumb_key='', small_key='', placeholder='', dominant_color='', width=0, height=0,
+			image_count=CASE WHEN cover_remote_url != '' THEN 1 ELSE 0 END,
+			updated_at=unixepoch() WHERE id=?`, itemID)
+		return err
+	}
+	c := imgs[0]
+	_, err = tx.ExecContext(ctx, `UPDATE items SET
+		cover_key=?, thumb_key=?, small_key=?, placeholder=?, dominant_color=?, width=?, height=?,
+		image_count=?, updated_at=unixepoch() WHERE id=?`,
+		c.CoverKey, c.ThumbKey, c.SmallKey, c.Placeholder, c.DominantColor, c.Width, c.Height,
+		len(imgs), itemID)
 	return err
 }
 
-// DeleteItem removes an item; media rows and tag links cascade.
+// AddItemImages appends one or more processed images + their media rows to an
+// existing item and keeps the cover/image_count fields in sync.
+func (s *Store) AddItemImages(ctx context.Context, itemID int64, imgs []ItemImage, media []Media) error {
+	if len(imgs) == 0 {
+		return nil
+	}
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var maxPos sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT MAX(position) FROM item_images WHERE item_id=?`, itemID).Scan(&maxPos); err != nil {
+			return err
+		}
+		start := 0
+		if maxPos.Valid {
+			start = int(maxPos.Int64) + 1
+		}
+		for i := range imgs {
+			imgs[i].Position = start + i
+		}
+		if err := insertItemImages(ctx, tx, itemID, imgs); err != nil {
+			return err
+		}
+		if err := insertMedia(ctx, tx, itemID, media); err != nil {
+			return err
+		}
+		return syncItemCover(ctx, tx, itemID)
+	})
+}
+
+// MoveItemImage reorders imageID within itemID's gallery: direction is "left",
+// "right", or "first" (promote to cover). Updates cover fields if position 0 changes.
+func (s *Store) MoveItemImage(ctx context.Context, itemID, imageID int64, direction string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM item_images WHERE item_id=? ORDER BY position ASC, id ASC`, itemID)
+		if err != nil {
+			return err
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		idx := -1
+		for i, id := range ids {
+			if id == imageID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return sql.ErrNoRows
+		}
+		switch direction {
+		case "left":
+			if idx > 0 {
+				ids[idx-1], ids[idx] = ids[idx], ids[idx-1]
+			}
+		case "right":
+			if idx < len(ids)-1 {
+				ids[idx], ids[idx+1] = ids[idx+1], ids[idx]
+			}
+		case "first":
+			if idx > 0 {
+				copy(ids[1:idx+1], ids[0:idx])
+				ids[0] = imageID
+			}
+		default:
+			return fmt.Errorf("invalid direction %q", direction)
+		}
+		for i, id := range ids {
+			if _, err := tx.ExecContext(ctx, `UPDATE item_images SET position=? WHERE id=?`, i, id); err != nil {
+				return err
+			}
+		}
+		return syncItemCover(ctx, tx, itemID)
+	})
+}
+
+// ReorderItemImages persists a full drag-and-drop ordering of image IDs for itemID.
+// Any existing image IDs omitted from orderedIDs are kept at the end in their
+// original relative order. Syncs the cover to position 0.
+func (s *Store) ReorderItemImages(ctx context.Context, itemID int64, orderedIDs []int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM item_images WHERE item_id=? ORDER BY position ASC, id ASC`, itemID)
+		if err != nil {
+			return err
+		}
+		existing := map[int64]bool{}
+		var origOrder []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			existing[id] = true
+			origOrder = append(origOrder, id)
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(origOrder) == 0 {
+			return sql.ErrNoRows
+		}
+		seen := map[int64]bool{}
+		var finalOrder []int64
+		for _, id := range orderedIDs {
+			if existing[id] && !seen[id] {
+				seen[id] = true
+				finalOrder = append(finalOrder, id)
+			}
+		}
+		for _, id := range origOrder {
+			if !seen[id] {
+				finalOrder = append(finalOrder, id)
+			}
+		}
+		for i, id := range finalOrder {
+			if _, err := tx.ExecContext(ctx, `UPDATE item_images SET position=? WHERE id=?`, i, id); err != nil {
+				return err
+			}
+		}
+		return syncItemCover(ctx, tx, itemID)
+	})
+}
+
+// UpdateItemImageAlt updates the caption / alt text on a single gallery image.
+func (s *Store) UpdateItemImageAlt(ctx context.Context, itemID, imageID int64, alt string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE item_images SET alt=? WHERE id=? AND item_id=?`, strings.TrimSpace(alt), imageID, itemID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return sql.ErrNoRows
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE items SET updated_at=unixepoch() WHERE id=?`, itemID)
+		return err
+	})
+}
+
+// BulkUpdateVisibility sets visibility on all provided item IDs in one transaction.
+func (s *Store) BulkUpdateVisibility(ctx context.Context, ids []int64, vis string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	vis = visibility(vis)
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx, `UPDATE items SET visibility=?, updated_at=unixepoch(),
+				published_at=COALESCE(published_at, CASE WHEN ?='public' THEN unixepoch() END)
+				WHERE id=?`, vis, vis, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// BulkSetCategory assigns (or clears when empty) the category on all provided item IDs.
+func (s *Store) BulkSetCategory(ctx context.Context, ids []int64, catName string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var catID int64
+		if strings.TrimSpace(catName) != "" {
+			var err error
+			if catID, err = getOrCreate(ctx, tx, "categories", catName); err != nil {
+				return err
+			}
+		}
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx, `UPDATE items SET category_id=?, updated_at=unixepoch() WHERE id=?`, nullID(catID), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// BulkAddTags attaches tags to all provided item IDs without removing existing tags.
+func (s *Store) BulkAddTags(ctx context.Context, ids []int64, tags []string) error {
+	if len(ids) == 0 || len(tags) == 0 {
+		return nil
+	}
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if err := attachTags(ctx, tx, id, tags); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE items SET updated_at=unixepoch() WHERE id=?`, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteItemImage removes a single image from a multi-image item, deletes its
+// media rows, re-syncs the item's cover/image_count, and returns the removed
+// storage keys so the caller can delete the blobs. Refuses to delete the last
+// image of an image item (use Replace or Delete item instead).
+func (s *Store) DeleteItemImage(ctx context.Context, itemID, imageID int64) (removedKeys []string, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM items WHERE id=?`, itemID).Scan(&kind); err != nil {
+			return err
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM item_images WHERE item_id=?`, itemID).Scan(&count); err != nil {
+			return err
+		}
+		var coverKey string
+		if err := tx.QueryRowContext(ctx, `SELECT cover_key FROM item_images WHERE id=? AND item_id=?`, imageID, itemID).Scan(&coverKey); err != nil {
+			return err
+		}
+		if count <= 1 && kind == "image" {
+			return errors.New("cannot delete the only image of an image item; replace it or delete the item")
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM item_images WHERE id=? AND item_id=?`, imageID, itemID); err != nil {
+			return err
+		}
+		// Collect and remove all media rows sharing this image's asset prefix ("items/<asset>/%").
+		if dir := path.Dir(coverKey); strings.HasPrefix(dir, "items/") {
+			prefix := dir + "/%"
+			rows, err := tx.QueryContext(ctx, `SELECT storage_key FROM media WHERE item_id=? AND storage_key LIKE ?`, itemID, prefix)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var k string
+				if err := rows.Scan(&k); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				removedKeys = append(removedKeys, k)
+			}
+			_ = rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM media WHERE item_id=? AND storage_key LIKE ?`, itemID, prefix); err != nil {
+				return err
+			}
+		}
+		return syncItemCover(ctx, tx, itemID)
+	})
+	return removedKeys, err
+}
+
+// SetItemSmallKey sets just the small (400px) variant key (used by the backfill).
+func (s *Store) SetItemSmallKey(ctx context.Context, id int64, key string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE items SET small_key=? WHERE id=?`, key, id); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE item_images SET small_key=? WHERE item_id=? AND position=0`, key, id)
+		return err
+	})
+}
+
+// DeleteItem removes an item; media rows, gallery images, and tag links cascade.
 func (s *Store) DeleteItem(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM items WHERE id=?`, id)
 	return err
@@ -722,6 +1309,7 @@ func (s *Store) ResetContent(ctx context.Context) error {
 			`DELETE FROM reposts`,
 			`DELETE FROM remote_feed_items`,
 			`DELETE FROM item_tags`,
+			`DELETE FROM item_images`,
 			`DELETE FROM media`,
 			`DELETE FROM items`,
 			`DELETE FROM tags`,
@@ -744,17 +1332,17 @@ func (s *Store) GetAdjacent(ctx context.Context, it Item, includePrivate bool) (
 	c := it.CreatedAt.Unix()
 	q := `SELECT COALESCE((SELECT id FROM items WHERE (created_at %[1]s ? OR (created_at = ? AND id %[1]s ?))
 		AND (? OR visibility='public') ORDER BY created_at %[2]s, id %[2]s LIMIT 1), 0)`
-	if err = s.db.QueryRowContext(ctx, fmt.Sprintf(q, ">", "ASC"), c, c, it.ID, includePrivate).Scan(&prevID); err != nil {
+	if err = s.rdb.QueryRowContext(ctx, fmt.Sprintf(q, ">", "ASC"), c, c, it.ID, includePrivate).Scan(&prevID); err != nil {
 		return
 	}
-	err = s.db.QueryRowContext(ctx, fmt.Sprintf(q, "<", "DESC"), c, c, it.ID, includePrivate).Scan(&nextID)
+	err = s.rdb.QueryRowContext(ctx, fmt.Sprintf(q, "<", "DESC"), c, c, it.ID, includePrivate).Scan(&nextID)
 	return
 }
 
 // GetRelated returns items that share a category or any tag with it (excluding
 // it), newest first.
 func (s *Store) GetRelated(ctx context.Context, it Item, limit int, includePrivate bool) ([]Item, error) {
-	return queryAll(ctx, s.db, scanItem, `SELECT`+itemCardColumns+itemFrom+`
+	return queryAll(ctx, s.rdb, scanItem, `SELECT`+itemCardColumns+itemFrom+`
 		WHERE i.id != ? AND (? OR i.visibility='public') AND (
 			(? != 0 AND i.category_id = ?)
 			OR i.id IN (SELECT item_id FROM item_tags WHERE tag_id IN
@@ -775,7 +1363,7 @@ type Stats struct {
 func (s *Store) PublicStats(ctx context.Context) (Stats, error) {
 	var st Stats
 	var oldest, newest, updated sql.NullInt64
-	err := s.db.QueryRowContext(ctx,
+	err := s.rdb.QueryRowContext(ctx,
 		`SELECT COUNT(*), MIN(created_at), MAX(created_at), MAX(updated_at) FROM items WHERE visibility='public'`).
 		Scan(&st.Count, &oldest, &newest, &updated)
 	if oldest.Valid {
@@ -840,24 +1428,24 @@ func (s *Store) UpsertMedia(ctx context.Context, m Media) error {
 
 // ListMedia returns an item's media rows.
 func (s *Store) ListMedia(ctx context.Context, itemID int64) ([]Media, error) {
-	return queryAll(ctx, s.db, scanMedia, mediaSelect+`WHERE m.item_id = ? ORDER BY m.id`, itemID)
+	return queryAll(ctx, s.rdb, scanMedia, mediaSelect+`WHERE m.item_id = ? ORDER BY m.id`, itemID)
 }
 
 // AllMedia returns every media row (orphan scan, placement sync).
 func (s *Store) AllMedia(ctx context.Context) ([]Media, error) {
-	return queryAll(ctx, s.db, scanMedia, mediaSelect+`ORDER BY m.id`)
+	return queryAll(ctx, s.rdb, scanMedia, mediaSelect+`ORDER BY m.id`)
 }
 
 // StrayMediaRows returns media rows whose parent item no longer exists (the FK
 // cascade should prevent these, but the scan reports/cleans any that slip through).
 func (s *Store) StrayMediaRows(ctx context.Context) ([]Media, error) {
-	return queryAll(ctx, s.db, scanMedia, mediaSelect+`WHERE i.id IS NULL`)
+	return queryAll(ctx, s.rdb, scanMedia, mediaSelect+`WHERE i.id IS NULL`)
 }
 
 // MediaByKey looks up a media row (with its item's privacy) by storage key.
 // Returns sql.ErrNoRows when the key is unknown or orphaned.
 func (s *Store) MediaByKey(ctx context.Context, key string) (Media, error) {
-	return scanMedia(s.db.QueryRowContext(ctx, mediaSelect+`WHERE m.storage_key = ? AND i.id IS NOT NULL`, key))
+	return scanMedia(s.rdb.QueryRowContext(ctx, mediaSelect+`WHERE m.storage_key = ? AND i.id IS NOT NULL`, key))
 }
 
 // SetMediaPlacement records which storage tiers hold a media row's blob.
@@ -1027,13 +1615,13 @@ func (s *Store) AddRemoteFeed(ctx context.Context, feedURL string) (feed *Remote
 
 // ListRemoteFeeds returns followed sources; active feeds first, then title, URL.
 func (s *Store) ListRemoteFeeds(ctx context.Context, activeOnly bool) ([]RemoteFeed, error) {
-	return queryAll(ctx, s.db, scanRemoteFeed, remoteFeedSelect+`WHERE NOT ? OR active=1
+	return queryAll(ctx, s.rdb, scanRemoteFeed, remoteFeedSelect+`WHERE NOT ? OR active=1
 		ORDER BY active DESC, title COLLATE NOCASE, feed_url`, activeOnly)
 }
 
 // GetRemoteFeed returns a source by id, or (nil, nil) when missing.
 func (s *Store) GetRemoteFeed(ctx context.Context, id int64) (*RemoteFeed, error) {
-	return queryOne(s.db.QueryRowContext(ctx, remoteFeedSelect+`WHERE id=?`, id), scanRemoteFeed)
+	return queryOne(s.rdb.QueryRowContext(ctx, remoteFeedSelect+`WHERE id=?`, id), scanRemoteFeed)
 }
 
 // SetRemoteFeedActive toggles follow state. Missing id returns sql.ErrNoRows.
@@ -1139,12 +1727,12 @@ func (s *Store) ListRemoteFeedItems(ctx context.Context, f RemoteFeedItemFilter)
 		q += " LIMIT ?"
 		args = append(args, f.Limit)
 	}
-	return queryAll(ctx, s.db, scanRemoteFeedItem, q, args...)
+	return queryAll(ctx, s.rdb, scanRemoteFeedItem, q, args...)
 }
 
 // GetRemoteFeedItem returns one cached item with repost mapping, or (nil, nil).
 func (s *Store) GetRemoteFeedItem(ctx context.Context, id int64) (*RemoteFeedItem, error) {
-	return queryOne(s.db.QueryRowContext(ctx, remoteItemSelect+`WHERE ri.id=?`, id), scanRemoteFeedItem)
+	return queryOne(s.rdb.QueryRowContext(ctx, remoteItemSelect+`WHERE ri.id=?`, id), scanRemoteFeedItem)
 }
 
 // CreateRepost creates a public local link item from a remote feed item.

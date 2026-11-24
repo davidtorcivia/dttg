@@ -406,3 +406,91 @@ func TestSlugifyStable(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiImageGalleryCRUD(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+
+	id, err := st.CreateItemWithMediaAndTags(ctx, Item{
+		Kind: "image", Title: "Triptych", Visibility: "public",
+		CoverKey: "items/a/full.jpg", ThumbKey: "items/a/thumb.jpg", SmallKey: "items/a/small.jpg",
+		Width: 800, Height: 600,
+		Images: []ItemImage{
+			{Position: 0, CoverKey: "items/a/full.jpg", ThumbKey: "items/a/thumb.jpg", SmallKey: "items/a/small.jpg", Width: 800, Height: 600, Alt: "first"},
+			{Position: 1, CoverKey: "items/b/full.jpg", ThumbKey: "items/b/thumb.jpg", SmallKey: "items/b/small.jpg", Width: 900, Height: 700, Alt: "second"},
+		},
+	}, []Media{
+		{Variant: "full", StorageKey: "items/a/full.jpg", ContentType: "image/jpeg", OnLocal: true},
+		{Variant: "img:b:full", StorageKey: "items/b/full.jpg", ContentType: "image/jpeg", OnLocal: true},
+	}, []string{"series"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := st.GetItem(ctx, id, false)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	if got.ImageCount != 2 || len(got.Images) != 2 {
+		t.Fatalf("got imageCount=%d len(Images)=%d, want 2", got.ImageCount, len(got.Images))
+	}
+	if got.Images[0].Alt != "first" || got.Images[1].Alt != "second" {
+		t.Errorf("unexpected image alts: %+v", got.Images)
+	}
+
+	// ListItems batch-attaches multi-image rows
+	listed, err := st.ListItems(ctx, ItemFilter{Cards: true})
+	if err != nil || len(listed) != 1 || len(listed[0].Images) != 2 {
+		t.Fatalf("list multi-images = %+v, err=%v", listed, err)
+	}
+
+	// Append a third image
+	if err := st.AddItemImages(ctx, id,
+		[]ItemImage{{CoverKey: "items/c/full.jpg", ThumbKey: "items/c/thumb.jpg", Width: 1000, Height: 800, Alt: "third"}},
+		[]Media{{Variant: "img:c:full", StorageKey: "items/c/full.jpg", ContentType: "image/jpeg", OnLocal: true}},
+	); err != nil {
+		t.Fatalf("AddItemImages: %v", err)
+	}
+	got, _ = st.GetItem(ctx, id, true)
+	if got.ImageCount != 3 || len(got.Images) != 3 || got.Images[2].CoverKey != "items/c/full.jpg" {
+		t.Fatalf("after add: count=%d images=%+v", got.ImageCount, got.Images)
+	}
+
+	// Promote third image to cover ("first")
+	thirdID := got.Images[2].ID
+	if err := st.MoveItemImage(ctx, id, thirdID, "first"); err != nil {
+		t.Fatalf("MoveItemImage first: %v", err)
+	}
+	got, _ = st.GetItem(ctx, id, true)
+	if got.CoverKey != "items/c/full.jpg" || got.Width != 1000 || got.Images[0].ID != thirdID {
+		t.Fatalf("cover not promoted: cover=%s width=%d imgs=%+v", got.CoverKey, got.Width, got.Images)
+	}
+
+	// Delete the promoted cover -> next image ("a") becomes cover and removed keys returned
+	removed, err := st.DeleteItemImage(ctx, id, thirdID)
+	if err != nil {
+		t.Fatalf("DeleteItemImage: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "items/c/full.jpg" {
+		t.Errorf("removed keys = %v, want [items/c/full.jpg]", removed)
+	}
+	got, _ = st.GetItem(ctx, id, true)
+	if got.ImageCount != 2 || got.CoverKey != "items/a/full.jpg" {
+		t.Fatalf("after delete cover: count=%d cover=%s", got.ImageCount, got.CoverKey)
+	}
+
+	// Delete down to 1, then refuse deleting the very last image
+	if _, err := st.DeleteItemImage(ctx, id, got.Images[1].ID); err != nil {
+		t.Fatalf("delete 2nd: %v", err)
+	}
+	got, _ = st.GetItem(ctx, id, true)
+	if _, err := st.DeleteItemImage(ctx, id, got.Images[0].ID); err == nil {
+		t.Fatal("expected error deleting last remaining image of image item")
+	}
+
+	// ListItemMediaKeys includes gallery cover keys
+	keys, err := st.ListItemMediaKeys(ctx)
+	if err != nil || len(keys) != 1 || len(keys[0].ImageCoverKeys) != 1 {
+		t.Fatalf("ListItemMediaKeys = %+v, err=%v", keys, err)
+	}
+}

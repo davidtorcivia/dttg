@@ -9,18 +9,32 @@
   <main id="maincontent" tabindex="-1">
   <div class="admin admin-form">
     <h1>New item</h1>
+    {{- with .DuplicateOf}}
+    <div class="dup-notice" role="status">
+      {{- if .ThumbURL}}<img src="{{.ThumbURL}}" alt="">{{end}}
+      <div class="dup-notice-body">
+        <strong>Already in the glass — Plate {{pad3 .ID}}</strong>
+        <p>{{if .Title}}{{.Title}}{{else}}Untitled {{.Kind}}{{end}} · {{longDate .CreatedAt}}</p>
+        <p><a href="{{.DetailURL}}">View existing plate &rarr;</a></p>
+      </div>
+    </div>
+    {{- end}}
     <form method="POST" action="/admin/items" enctype="multipart/form-data">
       {{template "csrf" .}}
-      <label>URL <span>(image, link, document, or YouTube/Vimeo — kind is auto-detected)</span>
+      <label>URL <span>(image, multi-image tweet / Bluesky / Mastodon, link, document, or YouTube/Vimeo — auto-detected)</span>
         <input type="url" name="url" placeholder="https://…" value="{{with .Prefill}}{{.URL}}{{end}}">
       </label>
-      <label>…or upload a file <span>(image, PDF, or document)</span>
-        <span class="file-field">
-          <span class="file-btn">Choose file</span>
-          <span class="file-name" data-file-name>No file chosen</span>
-          <input type="file" name="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.rtf,.epub">
-        </span>
-      </label>
+      <div class="form-field">
+        <span class="field-label">…or upload file(s) <span>(single or multiple images for a series, animated GIF, video, PDF, or document)</span></span>
+        <label class="dropzone" data-dropzone>
+          <span class="dropzone-inner">
+            <span class="file-btn">Choose files</span>
+            <span class="file-name" data-file-name>Drop images here, paste, or browse</span>
+          </span>
+          <input type="file" name="file" multiple accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.rtf,.epub">
+        </label>
+        <div class="upload-previews" data-upload-previews hidden></div>
+      </div>
       <label>Title
         <input type="text" name="title" value="{{with .Prefill}}{{.Title}}{{end}}">
       </label>
@@ -40,8 +54,13 @@
           <option value="private"{{if and .Prefill (eq .Prefill.Visibility "private")}} selected{{end}}>Private</option>
         </select>
       </label>
+      {{- if .DuplicateOf}}
+      <label class="check-inline">
+        <input type="checkbox" name="force" value="1" checked> Archive anyway (allow duplicate)
+      </label>
+      {{- end}}
       {{template "flash" .}}
-      <div class="form-actions"><button type="submit">Archive it</button> <a href="/admin">Cancel</a></div>
+      <div class="form-actions"><button type="submit">{{if .DuplicateOf}}Archive anyway{{else}}Archive it{{end}}</button> <a href="/admin">Cancel</a></div>
     </form>
   </div>
   </main>

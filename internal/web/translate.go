@@ -53,13 +53,32 @@ func (c *translateCache) get(key string) (text, source string, ok bool) {
 	return e.text, e.source, true
 }
 
+var outboundClient = &http.Client{
+	Timeout: 12 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     60 * time.Second,
+		TLSHandshakeTimeout: 8 * time.Second,
+	},
+}
+
 func (c *translateCache) set(key, text, source string) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.prune(now)
 	if len(c.data) >= translateCacheLimit {
-		return // full of live entries; skip caching rather than grow without bound
+		var oldestKey string
+		var oldestExp time.Time
+		for k, e := range c.data {
+			if oldestKey == "" || e.exp.Before(oldestExp) {
+				oldestKey, oldestExp = k, e.exp
+			}
+		}
+		if oldestKey != "" {
+			delete(c.data, oldestKey)
+		}
 	}
 	c.data[key] = translateCacheEntry{text: text, source: source, exp: now.Add(translateCacheTTL)}
 }
@@ -126,7 +145,7 @@ func translateText(ctx context.Context, text, target string) (string, string, er
 		return "", "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; dttg/1.0)")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := outboundClient.Do(req)
 	if err != nil {
 		return "", "", err
 	}

@@ -147,6 +147,14 @@ func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {
 	meta := ogMeta(it)
 	title := firstNonEmpty(it.Title, it.FileName, "Untitled")
 
+	boldFont, regFont := ogOutfit700, ogOutfit500
+	if boldFont == nil {
+		boldFont = ogBoldFont
+	}
+	if regFont == nil {
+		regFont = ogRegFont
+	}
+
 	if cover != nil {
 		filled := imaging.AdjustContrast(imaging.Fill(cover, ogW, ogH, imaging.Center, imaging.Lanczos), 8)
 		draw.Draw(canvas, canvas.Bounds(), filled, image.Point{}, draw.Src)
@@ -163,8 +171,8 @@ func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {
 		}
 		draw.Draw(canvas, image.Rect(0, scrimTop, ogW, ogH), scrim, image.Point{}, draw.Over)
 
-		drawTracked(canvas, ogFace(ogRegFont, 22), site, marginX, 66, paper, 3)
-		titleFace := ogFace(ogBoldFont, 66)
+		drawTracked(canvas, ogFace(regFont, 22), site, marginX, 66, paper, 3)
+		titleFace := ogFace(boldFont, 66)
 		lines := wrapText(titleFace, title, ogW-2*marginX)
 		if len(lines) > 3 {
 			lines = lines[:3]
@@ -174,11 +182,11 @@ func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {
 			drawString(canvas, titleFace, lines[i], marginX, ty, paper)
 			ty -= 76
 		}
-		drawTracked(canvas, ogFace(ogRegFont, 25), strings.ToUpper(meta), marginX, ty-8, paper, 2)
+		drawTracked(canvas, ogFace(regFont, 25), strings.ToUpper(meta), marginX, ty-8, paper, 2)
 	} else {
 		draw.Draw(canvas, canvas.Bounds(), &image.Uniform{ink}, image.Point{}, draw.Src)
-		drawTracked(canvas, ogFace(ogRegFont, 22), site, marginX, 72, paper, 3)
-		titleFace := ogFace(ogBoldFont, 72)
+		drawTracked(canvas, ogFace(regFont, 22), site, marginX, 72, paper, 3)
+		titleFace := ogFace(boldFont, 72)
 		lines := wrapText(titleFace, title, ogW-2*marginX)
 		if len(lines) > 4 {
 			lines = lines[:4]
@@ -188,7 +196,7 @@ func (s *Server) renderOGCard(it store.Item, cover image.Image) image.Image {
 			drawString(canvas, titleFace, ln, marginX, ty, paper)
 			ty += 84
 		}
-		drawTracked(canvas, ogFace(ogRegFont, 25), strings.ToUpper(meta), marginX, ogH-64, color.RGBA{0xaa, 0xaa, 0xaa, 0xff}, 2)
+		drawTracked(canvas, ogFace(regFont, 25), strings.ToUpper(meta), marginX, ogH-64, color.RGBA{0xaa, 0xaa, 0xaa, 0xff}, 2)
 	}
 
 	drawFrame(canvas, 26, color.RGBA{255, 255, 255, 90})
@@ -199,6 +207,9 @@ func ogMeta(it store.Item) string {
 	parts := []string{}
 	if it.CategoryName != "" {
 		parts = append(parts, it.CategoryName)
+	}
+	if it.ImageCount > 1 {
+		parts = append(parts, fmt.Sprintf("%d plates", it.ImageCount))
 	}
 	parts = append(parts, it.CreatedAt.Format("Jan 02, 2006"))
 	return strings.Join(parts, "   ·   ")

@@ -85,6 +85,12 @@
     </div>
 
     <div class="settings-section">
+      <h2>Sessions</h2>
+      <p class="muted">{{.Settings.ActiveSessions}} active admin session{{if ne .Settings.ActiveSessions 1}}s{{end}}. Changing the password via <code>dnttg set-password</code> revokes all sessions automatically.</p>
+      <form method="POST" action="/admin/sessions/revoke-others" data-confirm="Log out all other devices?">{{template "csrf" .}}<button type="submit" class="btn-subtle">Log out other devices</button></form>
+    </div>
+
+    <div class="settings-section">
       <h2>Maintenance</h2>
       <p class="muted">Scan storage + the database for orphaned media files, broken items (media missing), and stray rows — then review before deleting.</p>
       <p><a class="btn" href="/admin/maintenance">Scan for orphans</a></p>

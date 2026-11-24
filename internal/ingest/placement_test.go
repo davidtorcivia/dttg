@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"donottouchtheglass/internal/media"
@@ -13,9 +14,15 @@ import (
 
 // tierStore is an in-memory two-tier media.Store: private blobs live "local",
 // public ones "remote", mirroring MirrorStore's privacy rule.
-type tierStore struct{ local, remote map[string][]byte }
+type tierStore struct {
+	mu     sync.Mutex
+	local  map[string][]byte
+	remote map[string][]byte
+}
 
 func (t *tierStore) Put(_ context.Context, key, _ string, data []byte, private bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if private {
 		t.local[key] = data
 		delete(t.remote, key)
@@ -26,6 +33,8 @@ func (t *tierStore) Put(_ context.Context, key, _ string, data []byte, private b
 	return nil
 }
 func (t *tierStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if b, ok := t.local[key]; ok {
 		return io.NopCloser(strings.NewReader(string(b))), nil
 	}
@@ -33,6 +42,8 @@ func (t *tierStore) Open(_ context.Context, key string) (io.ReadCloser, error) {
 }
 func (t *tierStore) URL(key string) string { return "/" + key }
 func (t *tierStore) Delete(_ context.Context, key string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	delete(t.local, key)
 	delete(t.remote, key)
 	return nil

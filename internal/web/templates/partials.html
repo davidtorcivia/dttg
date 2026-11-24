@@ -6,7 +6,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="{{if eq .ThemeAttr "light"}}#f5f3ec{{else}}#111111{{end}}" id="theme-color">
+  <meta name="theme-color" content="{{if eq .ThemeAttr "light"}}#f5f3ec{{else}}#0b0907{{end}}" id="theme-color">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <link rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
   <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
@@ -18,14 +18,14 @@
 
 {{define "sysheader"}}
 <a href="#maincontent" class="skip-link">Skip to content</a>
-<div class="header">
+<header class="header">
   <div class="header-left">
-    <a href="/">{{.Cfg.SiteTagline}} //</a>
-    <a href="/search" class="search-toggle" id="search-toggle" aria-label="Search" aria-haspopup="dialog" aria-expanded="false">
+    <a href="/" class="header-tagline">{{.Cfg.SiteTagline}} //</a>
+    <a href="/search" class="search-toggle" id="search-toggle" aria-label="Search" aria-haspopup="dialog" aria-expanded="false" title="Search (/)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
     </a>
   </div>
-  <div>{{.Cfg.SiteTitle}}</div>
+  <div class="header-title">{{.Cfg.SiteTitle}}</div>
   <div class="header-right">
     <span id="sys-clock">00:00 // NYC --°F</span>
     <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" aria-pressed="{{if eq .ThemeAttr "dark"}}true{{else}}false{{end}}" title="Toggle dark (D)">
@@ -37,13 +37,13 @@
     </a>
     {{- end}}
   </div>
-</div>
+</header>
 <div class="search-overlay" id="search-overlay" role="dialog" aria-modal="true" aria-label="Search">
   <div class="search-panel">
     <form class="search-form" action="/search" method="GET" role="search">
       <svg class="search-form-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="search" name="q" id="search-input" placeholder="Search the archive" autocomplete="off" value="{{.SearchQuery}}">
-      <button type="button" class="search-close" id="search-close" aria-label="Close search">&times;</button>
+      <button type="button" class="search-close" id="search-close" aria-label="Close search">Esc</button>
     </form>
     <div class="search-results" id="search-results"></div>
     <div class="search-status" id="search-status" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -54,10 +54,13 @@
     <button type="button" class="modal-close" id="shortcuts-close" aria-label="Close shortcuts">&times;</button>
     <h2>Keys</h2>
     <dl>
-      <div><dt>&larr; &rarr;</dt><dd>previous / next item</dd></div>
+      <div><dt>&larr; &rarr;</dt><dd>cycle images / prev &amp; next item</dd></div>
+      <div><dt>Shift &larr; &rarr;</dt><dd>prev / next item (in series)</dd></div>
+      <div><dt>1–9</dt><dd>jump to image in series</dd></div>
       <div><dt>J K</dt><dd>move through the board</dd></div>
       <div><dt>&crarr;</dt><dd>open</dd></div>
       <div><dt>/</dt><dd>search</dd></div>
+      <div><dt>R</dt><dd>random plate</dd></div>
       <div><dt>G</dt><dd>home</dd></div>
       <div><dt>D</dt><dd>toggle dark</dd></div>
       <div><dt>?</dt><dd>this sheet</dd></div>
@@ -66,28 +69,30 @@
   </div>
 </div>
 {{if .IsAdmin}}
-<div class="adminbar">
-  <a href="/admin">Admin</a>
-  <a href="/admin/new">+ New</a>
-  <a href="/feed">Feed</a>
-  <a href="/admin/settings">Settings</a>
-  <a href="/">View site</a>
+<nav class="adminbar" aria-label="Admin">
+  <a href="/admin"{{if eq .CurrentPath "/admin"}} class="active" aria-current="page"{{end}}>Admin</a>
+  <a href="/admin/new"{{if eq .CurrentPath "/admin/new"}} class="active" aria-current="page"{{end}}>+ New</a>
+  <a href="/feed"{{if eq .CurrentPath "/feed"}} class="active" aria-current="page"{{end}}>Feed</a>
+  <a href="/admin/settings"{{if eq .CurrentPath "/admin/settings"}} class="active" aria-current="page"{{end}}>Settings</a>
+  <a href="/"{{if eq .CurrentPath "/"}} class="active" aria-current="page"{{end}}>View site</a>
   <form method="POST" action="/logout">{{template "csrf" .}}<button type="submit">Logout</button></form>
-</div>
+</nav>
 {{end}}
 {{end}}
 
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{end}}
 
 {{define "category_nav"}}
-{{- if or .Categories .ActiveTag}}
-<nav class="cats" aria-label="Categories">
-  <a href="/"{{if and (eq .ActiveCat "") (eq .ActiveTag "")}} class="active" aria-current="page"{{end}}>All</a>
-  {{- range .Categories}}
-  <a href="/category/{{.Slug}}"{{if eq $.ActiveCat .Slug}} class="active" aria-current="page"{{end}}>{{.Name}}{{if .Count}} <span>{{.Count}}</span>{{end}}</a>
+{{- if or .ActiveCat .ActiveTag .ActiveColor}}
+<nav class="active-filter" aria-label="Active filter">
+  {{- if .ActiveCat}}
+  <a href="/" class="cats-tag" aria-current="page" title="Clear category filter">{{.ActiveCat}} <span aria-hidden="true">&times;</span></a>
   {{- end}}
   {{- if .ActiveTag}}
-  <a href="/" class="active cats-tag" aria-current="page" title="Clear tag filter">#{{.ActiveTag}} <span aria-hidden="true">&times;</span></a>
+  <a href="/" class="cats-tag" aria-current="page" title="Clear tag filter">#{{.ActiveTag}} <span aria-hidden="true">&times;</span></a>
+  {{- end}}
+  {{- if .ActiveColor}}
+  <a href="/" class="cats-tag" aria-current="page" title="Clear color filter">Palette: {{.ActiveColor}} <span aria-hidden="true">&times;</span></a>
   {{- end}}
 </nav>
 {{- end}}
@@ -97,6 +102,9 @@
 {{- if .Error}}
 <div class="flash flash-error" role="status">{{.Error}}</div>
 {{- end}}
+{{- if .Notice}}
+<div class="flash flash-ok" role="status">{{.Notice}}</div>
+{{- end}}
 {{end}}
 
 {{define "tail"}}
@@ -104,10 +112,27 @@
 {{end}}
 
 {{define "card"}}
-<a href="{{.DetailURL}}" class="card" data-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}">
+<a href="{{.DetailURL}}" class="card{{if .MultiImage}} card--multi{{end}}" data-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}"{{if .GalleryJSON}} data-gallery="{{.GalleryJSON}}"{{end}}>
   <div class="card-img-container"{{if .DominantColor}} style="background-color:{{.DominantColor}}"{{end}}>
     {{- if .ThumbURL}}
     <img src="{{.ThumbURL}}"{{if and .CoverURL (ne .CoverURL .ThumbURL)}} srcset="{{if .SmallURL}}{{.SmallURL}} {{clampW 400 .Width}}w, {{end}}{{.ThumbURL}} {{clampW 800 .Width}}w, {{.CoverURL}} {{clampW 1600 .Width}}w" sizes="(max-width:600px) 92vw, (max-width:1000px) 46vw, 30vw"{{end}} alt="{{.AltText}}"{{if .Eager}} fetchpriority="high"{{else}} loading="lazy"{{end}}{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}} data-vt="cover-{{.ID}}"{{if .Placeholder}} data-ph="{{.Placeholder}}"{{end}}>
+    {{- if .MultiImage}}
+    <span class="card-series-badge" aria-label="{{.GalleryCount}} images">
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="1.5" y="4.5" width="9.5" height="9.5" rx="1"></rect><path d="M5 4.5V2.5a1 1 0 0 1 1-1h7.5a1 1 0 0 1 1 1V10a1 1 0 0 1-1 1H11"></path></svg>
+      <span class="card-series-count">1/{{.GalleryCount}}</span>
+    </span>
+    {{- if .GalleryJSON}}
+    <button type="button" class="card-peek-btn card-peek-prev" data-peek="-1" aria-label="Previous image" tabindex="-1">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5L5.5 8 10 12.5"/></svg>
+    </button>
+    <button type="button" class="card-peek-btn card-peek-next" data-peek="1" aria-label="Next image" tabindex="-1">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5"/></svg>
+    </button>
+    <span class="card-peek-dots" aria-hidden="true">
+      {{- range $i, $_ := .Images}}<i{{if eq $i 0}} class="is-active"{{end}}></i>{{end}}
+    </span>
+    {{- end}}
+    {{- end}}
     {{- else if eq .Kind "document"}}
     <div class="doc-tile">
       <span class="doc-ext">{{fileext .FileName}}</span>
@@ -141,7 +166,7 @@
   <div class="col-line">
     <span class="col-vitals">{{if .Stats}}{{.Stats.Count}} pieces · since {{.Stats.Oldest.Year}}{{end}}</span>
     <span class="col-mark">{{.Cfg.SiteTitle}}</span>
-    <span class="col-meta">Outfit · NYC · <a href="/feed.json">JSON</a> / <a href="/feed.xml">RSS</a></span>
+    <span class="col-meta"><a href="/random">Random</a> · Outfit · NYC · <a href="/feed.json">JSON</a> / <a href="/feed.xml">RSS</a></span>
   </div>
 </footer>
 {{end}}

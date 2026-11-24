@@ -87,12 +87,13 @@ func validateFetchURL(raw string) error {
 
 // blockedPrefixes are non-public ranges not covered by the netip predicates.
 var blockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),     // "this network"
-	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT
-	netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
-	netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
-	netip.MustParsePrefix("240.0.0.0/4"),   // reserved + broadcast
-	netip.MustParsePrefix("64:ff9b::/96"),  // NAT64 (maps onto IPv4, incl. private)
+	netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"),  // CGNAT
+	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking
+	netip.MustParsePrefix("240.0.0.0/4"),    // reserved + broadcast
+	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 (maps onto IPv4, incl. private)
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
 }
 
 func rejectIP(ip netip.Addr) error {

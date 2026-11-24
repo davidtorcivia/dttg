@@ -20,7 +20,7 @@
       {{- end}}
     </div>
 
-    <div id="board-more" data-cursor-created="{{.CursorCreated}}" data-cursor-id="{{.CursorID}}" data-cat="{{.ActiveCat}}" data-tag="{{.ActiveTag}}" data-page="48"{{if .BoardDone}} data-done="1"{{end}}></div>
+    <div id="board-more" data-cursor-created="{{.CursorCreated}}" data-cursor-id="{{.CursorID}}" data-cat="{{.ActiveCat}}" data-tag="{{.ActiveTag}}" data-color="{{.ActiveColor}}" data-page="48"{{if .BoardDone}} data-done="1"{{end}}></div>
   </main>
 
   {{template "colophon" .}}

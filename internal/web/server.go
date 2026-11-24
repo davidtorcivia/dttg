@@ -62,8 +62,13 @@ func parseTemplates() (*template.Template, error) {
 	funcs := template.FuncMap{
 		"shortDate": func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02 06")) },
 		"longDate":  func(t time.Time) string { return strings.ToUpper(t.Format("Jan 02, 2006")) },
+		"pad2":      func(n int) string { return fmt.Sprintf("%02d", n) },
 		"pad3":      func(n int64) string { return fmt.Sprintf("%03d", n) },
-		"filesize":  humanSize,
+		"add":         func(a, b int) int { return a + b },
+		"sub":         func(a, b int) int { return a - b },
+		"isTweetURL":  ingest.IsTweetURL,
+		"colorBucket": store.ColorBucket,
+		"filesize":    humanSize,
 		"fileext":   fileExt,
 		"host":      hostname,
 		"hasPrefix": strings.HasPrefix,
@@ -169,7 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	staticSub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("GET /static/", cacheControl("public, max-age=604800",
+	mux.Handle("GET /static/", staticCacheControl(
 		http.StripPrefix("/static/", http.FileServer(http.FS(staticSub)))))
 	mux.HandleFunc("GET /media/{key...}", s.handleMedia)
 
@@ -192,6 +197,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /", s.notFound) // the site's 404 page for unknown paths
 	mux.HandleFunc("GET /{$}", s.handleBoard)
+	mux.HandleFunc("GET /random", s.handleRandom)
 	mux.HandleFunc("GET /category/{slug}", s.handleBoard)
 	mux.HandleFunc("GET /tag/{slug}", s.handleBoard)
 	mux.HandleFunc("GET /item/{id}", s.handleDetail)
@@ -210,9 +216,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
 
-	mux.HandleFunc("GET /login", s.handleLoginForm)
-	mux.HandleFunc("POST /login", s.handleLoginSubmit) // no CSRF: no session yet (login CSRF is benign)
-	mux.HandleFunc("POST /logout", s.csrf(s.handleLogout))
+	mux.HandleFunc("GET /login", noStore(s.handleLoginForm))
+	mux.HandleFunc("POST /login", noStore(s.handleLoginSubmit)) // no CSRF: no session yet (login CSRF is benign)
+	mux.HandleFunc("POST /logout", noStore(s.csrf(s.handleLogout)))
 
 	// API (bearer-token auth) — used by the extension + bookmarklet. CORS-enabled
 	// so the extension can call it cross-origin; OPTIONS answers the preflight.
@@ -223,23 +229,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/taxonomy", apiTaxonomy)
 	mux.HandleFunc("OPTIONS /api/taxonomy", apiTaxonomy)
 
-	// Admin (session auth). POSTs are CSRF-checked.
+	// Admin (session auth). POSTs are CSRF-checked; all responses are no-store.
 	admin := func(pattern string, h http.HandlerFunc) {
 		if strings.HasPrefix(pattern, "POST ") {
 			h = s.csrf(h)
 		}
-		mux.HandleFunc(pattern, s.requireAdmin(h))
+		mux.HandleFunc(pattern, noStore(s.requireAdmin(h)))
 	}
 	admin("GET /admin", s.handleAdminDashboard)
 	admin("GET /admin/new", s.handleAdminNew)
 	admin("POST /admin/items", s.handleAdminCreate)
+	admin("POST /admin/items/bulk", s.handleAdminBulk)
 	admin("GET /admin/items/{id}/edit", s.handleAdminEdit)
 	admin("POST /admin/items/{id}", s.handleAdminUpdate)
 	admin("POST /admin/items/{id}/media", s.handleAdminReplaceMedia)
+	admin("POST /admin/items/{id}/images", s.handleAdminAddImages)
+	admin("POST /admin/items/{id}/images/reorder", s.handleAdminReorderImages)
+	admin("POST /admin/items/{id}/images/{imgID}/move", s.handleAdminMoveImage)
+	admin("POST /admin/items/{id}/images/{imgID}/alt", s.handleAdminUpdateImageAlt)
+	admin("POST /admin/items/{id}/images/{imgID}/delete", s.handleAdminDeleteImage)
+	admin("POST /admin/items/{id}/refresh-tweet", s.handleAdminRefreshTweet)
 	admin("POST /admin/items/{id}/delete", s.handleAdminDelete)
 	admin("GET /admin/settings", s.handleAdminSettings)
 	admin("POST /admin/settings", s.handleAdminSettingsSave)
 	admin("POST /admin/tokens/revoke", s.handleAdminTokenRevoke)
+	admin("POST /admin/sessions/revoke-others", s.handleAdminRevokeOtherSessions)
 	admin("GET /admin/maintenance", s.handleMaintenance)
 	admin("POST /admin/maintenance/cleanup", s.handleMaintenanceCleanup)
 	admin("POST /admin/backup", s.handleAdminBackup)
@@ -256,13 +270,24 @@ func (s *Server) Handler() http.Handler {
 	// shares are stashed in pending_shares and recovered after login.
 	mux.HandleFunc("POST /share", s.handleShare)
 
-	return logRequests(s.securityHeaders(s.withAdmin(recoverPanic(mux))))
+	return logRequests(gzipMiddleware(s.securityHeaders(s.withAdmin(recoverPanic(mux)))))
 }
 
-// handleMedia serves media bytes through an auth-aware gateway. Public item media
-// is cacheable; private media requires an admin session and is never disclosed
-// (404, not 403) to anonymous clients. ServeContent adds Range support, so
-// videos can seek and PDFs load incrementally.
+// isInlineSafeMedia reports MIME types safe to render inline under a sandboxed CSP.
+func isInlineSafeMedia(ct string) bool {
+	ct, _, _ = strings.Cut(ct, ";")
+	switch strings.ToLower(strings.TrimSpace(ct)) {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
+		"video/mp4", "video/webm", "video/ogg", "video/quicktime":
+		return true
+	}
+	return false
+}
+
+// handleMedia serves media bytes through an auth-aware, XSS-sandboxed gateway.
+// Public item media is cacheable; private media requires an admin session and is
+// never disclosed (404, not 403) to anonymous clients. Active types (SVG, HTML,
+// arbitrary documents) are forced as attachments with a sandboxed CSP.
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(path.Clean("/"+r.PathValue("key")), "/")
 	if key == "" || strings.Contains(key, "..") {
@@ -281,16 +306,30 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
+	h := w.Header()
 	if m.Private {
-		w.Header().Set("Cache-Control", "private, no-store")
+		h.Set("Cache-Control", "private, no-store")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
-	if m.ContentType != "" {
-		w.Header().Set("Content-Type", m.ContentType)
+	ct := strings.ToLower(strings.TrimSpace(m.ContentType))
+	if ct != "" {
+		h.Set("Content-Type", ct)
+	}
+	switch {
+	case ct == "application/pdf":
+		// Allow same-origin <iframe class="pdf-frame"> embedding of PDFs.
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; object-src 'self'")
+	case isInlineSafeMedia(ct):
+		h.Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; media-src 'self'; frame-ancestors 'none'; sandbox")
+	default:
+		// Never execute HTML/SVG/JS or unknown uploaded blobs under the app origin.
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox")
+		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
 	}
 	if rs, ok := rc.(io.ReadSeeker); ok {
-		http.ServeContent(w, r, path.Base(key), time.Time{}, rs) // sniffs Content-Type if unset
+		http.ServeContent(w, r, path.Base(key), time.Time{}, rs)
 		return
 	}
 	_, _ = io.Copy(w, rc)
@@ -315,10 +354,15 @@ func serveEmbedded(name, contentType string) http.HandlerFunc {
 	}
 }
 
-// cacheControl wraps a handler, adding a Cache-Control header.
-func cacheControl(value string, next http.Handler) http.Handler {
+// staticCacheControl serves fingerprinted assets (?v=…) and fonts with a 1-year
+// immutable cache header, falling back to 7 days for unversioned static files.
+func staticCacheControl(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", value)
+		if r.URL.Query().Get("v") != "" || strings.HasSuffix(r.URL.Path, ".woff2") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=604800")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

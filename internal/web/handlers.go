@@ -14,15 +14,42 @@ import (
 	"donottouchtheglass/internal/store"
 )
 
+// itemImageView is one image in an item's gallery, with resolved URLs.
+type itemImageView struct {
+	ID            int64
+	Position      int
+	CoverURL      string
+	ThumbURL      string
+	SmallURL      string
+	Placeholder   string
+	DominantColor string
+	Width         int
+	Height        int
+	Alt           string
+}
+
 // itemView decorates a store.Item with presentation-only fields.
 type itemView struct {
 	store.Item
-	CoverURL  string // full image (detail)
-	ThumbURL  string // small image (grid)
-	SmallURL  string // ~400px variant (smallest srcset step); empty for old items
-	FileURL   string // document/file blob
-	DetailURL string
-	Eager     bool // board: above-the-fold (first row) — load eagerly at high priority
+	CoverURL    string // full image (detail)
+	ThumbURL    string // small image (grid)
+	SmallURL    string // ~400px variant (smallest srcset step); empty for old items
+	FileURL     string // document/file blob
+	DetailURL   string
+	Eager       bool // board: above-the-fold (first row) — load eagerly at high priority
+	Images      []itemImageView
+	GalleryJSON string // compact JSON slide list when len(Images) > 1
+}
+
+// MultiImage reports whether this item has 2+ images in its gallery.
+func (v itemView) MultiImage() bool { return len(v.Images) > 1 || v.ImageCount > 1 }
+
+// GalleryCount returns the number of images attached to this item.
+func (v itemView) GalleryCount() int {
+	if len(v.Images) > 0 {
+		return len(v.Images)
+	}
+	return v.ImageCount
 }
 
 // metaTags drives SEO / Open Graph / Twitter Card output.
@@ -36,11 +63,17 @@ type metaTags struct {
 type pageData struct {
 	Cfg            config.Config
 	IsAdmin        bool
+	CurrentPath    string
 	Categories     []store.Category
 	PageTitle      string
 	ActiveCat      string
 	ActiveTag      string
+	ActiveColor    string
+	Palette        []store.PaletteSwatch
 	Error          string
+	Notice         string
+	DuplicateOf    *itemView
+	AdminFilter    *adminFilter
 	Next           string // login form: safe return path after auth
 	Items          []itemView
 	Item           *itemView
@@ -91,6 +124,7 @@ func (s *Server) page(r *http.Request, title string) pageData {
 	pd := pageData{
 		Cfg:          cfg,
 		IsAdmin:      isAdmin,
+		CurrentPath:  r.URL.Path,
 		Categories:   sd.catsPublic,
 		PageTitle:    title,
 		ColorScheme:  colorScheme,
@@ -160,6 +194,64 @@ func (s *Server) view(it store.Item) itemView {
 	// Remote-hosted covers (not yet processed) fall back to their original URL.
 	if v.CoverURL == "" {
 		v.CoverURL, v.ThumbURL = it.CoverRemoteURL, it.CoverRemoteURL
+	}
+	if len(it.Images) > 0 {
+		v.Images = make([]itemImageView, 0, len(it.Images))
+		for _, img := range it.Images {
+			cov := s.mediaURL(img.CoverKey, it.Visibility)
+			if cov == "" {
+				continue
+			}
+			v.Images = append(v.Images, itemImageView{
+				ID:            img.ID,
+				Position:      img.Position,
+				CoverURL:      cov,
+				ThumbURL:      s.mediaURL(firstNonEmpty(img.ThumbKey, img.CoverKey), it.Visibility),
+				SmallURL:      s.mediaURL(img.SmallKey, it.Visibility),
+				Placeholder:   img.Placeholder,
+				DominantColor: img.DominantColor,
+				Width:         img.Width,
+				Height:        img.Height,
+				Alt:           img.Alt,
+			})
+		}
+	} else if v.CoverURL != "" {
+		v.Images = []itemImageView{{
+			Position:      0,
+			CoverURL:      v.CoverURL,
+			ThumbURL:      v.ThumbURL,
+			SmallURL:      v.SmallURL,
+			Placeholder:   it.Placeholder,
+			DominantColor: it.DominantColor,
+			Width:         it.Width,
+			Height:        it.Height,
+		}}
+	}
+	if len(v.Images) > 1 {
+		type slide struct {
+			Full  string `json:"full"`
+			Thumb string `json:"thumb"`
+			Small string `json:"small,omitempty"`
+			W     int    `json:"w,omitempty"`
+			H     int    `json:"h,omitempty"`
+			Alt   string `json:"alt,omitempty"`
+			Color string `json:"color,omitempty"`
+		}
+		slides := make([]slide, len(v.Images))
+		for i, img := range v.Images {
+			slides[i] = slide{
+				Full:  img.CoverURL,
+				Thumb: img.ThumbURL,
+				Small: img.SmallURL,
+				W:     img.Width,
+				H:     img.Height,
+				Alt:   img.Alt,
+				Color: img.DominantColor,
+			}
+		}
+		if b, err := json.Marshal(slides); err == nil {
+			v.GalleryJSON = string(b)
+		}
 	}
 	return v
 }
@@ -256,7 +348,11 @@ func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Cards: true, Limit: boardPage}
+	colorFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("color")))
+	if !store.ValidColorBucket(colorFilter) {
+		colorFilter = ""
+	}
+	f := store.ItemFilter{IncludePrivate: s.isAdmin(r), Cards: true, Color: colorFilter, Limit: boardPage}
 	if strings.HasPrefix(r.URL.Path, "/category/") {
 		f.CategorySlug = r.PathValue("slug")
 	} else {
@@ -268,7 +364,8 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pd := s.page(r, s.siteTitle())
-	pd.ActiveCat, pd.ActiveTag = f.CategorySlug, f.TagSlug
+	pd.ActiveCat, pd.ActiveTag, pd.ActiveColor = f.CategorySlug, f.TagSlug, colorFilter
+	pd.Palette = store.PaletteSwatches
 	pd.Items = s.views(items)
 	// The masonry distributes cards round-robin, so the first row is the first
 	// N items — load those eagerly at high priority to help the board's LCP.
@@ -285,15 +382,31 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "index.html", pd)
 }
 
+// handleRandom redirects to a random archived item (respecting visibility).
+func (s *Server) handleRandom(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	id, err := s.store.RandomItemID(r.Context(), s.isAdmin(r))
+	if err != nil || id == 0 {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, itemPath(id), http.StatusSeeOther)
+}
+
 // handleBoardMore returns the next page of board cards as an HTML fragment
 // (used by infinite scroll).
 func (s *Server) handleBoardMore(w http.ResponseWriter, r *http.Request) {
+	colorFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("color")))
+	if !store.ValidColorBucket(colorFilter) {
+		colorFilter = ""
+	}
 	f := store.ItemFilter{
 		IncludePrivate: s.isAdmin(r),
 		Cards:          true,
 		Limit:          boardPage,
 		CategorySlug:   r.URL.Query().Get("cat"),
 		TagSlug:        r.URL.Query().Get("tag"),
+		Color:          colorFilter,
 	}
 	f.BeforeCreated, f.BeforeID = parseCursor(r)
 	items, err := s.store.ListItems(r.Context(), f)
@@ -390,6 +503,13 @@ func (s *Server) itemJSONLD(v itemView, nonce string) template.HTML {
 		if it.Width > 0 && it.Height > 0 {
 			ld["width"], ld["height"] = it.Width, it.Height
 		}
+		if len(v.Images) > 1 {
+			urls := make([]string, len(v.Images))
+			for i, img := range v.Images {
+				urls[i] = s.absURL(img.CoverURL)
+			}
+			ld["image"] = urls
+		}
 	default:
 		ld["@type"] = "Article"
 		ld["headline"] = name
@@ -413,7 +533,9 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data any
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache") // HTML is dynamic; always revalidate
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-cache") // HTML is dynamic; always revalidate
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())

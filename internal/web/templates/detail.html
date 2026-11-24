@@ -22,12 +22,43 @@
       {{- with .Item}}
       {{- if $fitMedia}}
       <figure class="media-frame">
-        <div class="media-stage">
-          {{- if $isVideoFile}}
-          <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
-          {{- else}}
-          <img src="{{.CoverURL}}"{{if and .ThumbURL (ne .ThumbURL .CoverURL)}} srcset="{{if .SmallURL}}{{.SmallURL}} {{clampW 400 .Width}}w, {{end}}{{.ThumbURL}} {{clampW 800 .Width}}w, {{.CoverURL}} {{clampW 1600 .Width}}w" sizes="(max-width:1000px) 92vw, 60vw"{{end}} alt="{{.AltText}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}" fetchpriority="high"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}>
-          <button type="button" class="expand-full" id="expand-full" hidden>[ expand full size ]</button>
+        <div class="media-col">
+          <div class="media-stage{{if and $isImg .MultiImage}} media-stage--gallery{{end}}"{{if and $isImg .GalleryJSON}} id="detail-gallery" data-gallery="{{.GalleryJSON}}"{{end}}>
+            {{- if $isVideoFile}}
+            <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
+            {{- else}}
+            <img id="detail-img" src="{{.CoverURL}}"{{if and .ThumbURL (ne .ThumbURL .CoverURL)}} srcset="{{if .SmallURL}}{{.SmallURL}} {{clampW 400 .Width}}w, {{end}}{{.ThumbURL}} {{clampW 800 .Width}}w, {{.CoverURL}} {{clampW 1600 .Width}}w" sizes="(max-width:1000px) 92vw, 60vw"{{end}} alt="{{.AltText}}" class="zoomable" data-full="{{.CoverURL}}" data-vt="cover-{{.ID}}" fetchpriority="high"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}>
+            {{- if .MultiImage}}
+            <div class="gallery-counter" id="gallery-counter" aria-live="polite">
+              <span class="gallery-cur">01</span><span class="gallery-sep">/</span><span class="gallery-tot">{{pad2 .GalleryCount}}</span>
+            </div>
+            <button type="button" class="gallery-nav gallery-prev" id="gallery-prev" aria-label="Previous image">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+            </button>
+            <button type="button" class="gallery-nav gallery-next" id="gallery-next" aria-label="Next image">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            {{- end}}
+            {{- end}}
+          </div>
+          {{- if $isImg}}
+          <div class="media-controls">
+            <button type="button" class="expand-full" id="expand-full" hidden>[ expand full size ]</button>
+            {{- if .MultiImage}}
+            <span class="gallery-hint">← → cycle · 1–{{.GalleryCount}} jump</span>
+            {{- end}}
+          </div>
+          {{- if .MultiImage}}
+          <p class="gallery-alt" id="gallery-alt"{{with (index .Images 0)}}{{if not .Alt}} hidden{{end}}{{else}} hidden{{end}}>{{with (index .Images 0)}}{{.Alt}}{{end}}</p>
+          <div class="gallery-strip" id="gallery-strip" role="tablist" aria-label="Series plates">
+            {{- range $i, $img := .Images}}
+            <button type="button" class="gallery-thumb{{if eq $i 0}} is-active{{end}}" role="tab" data-slide="{{$i}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}" aria-label="Image {{add $i 1}} of {{$.Item.GalleryCount}}">
+              <img src="{{$img.ThumbURL}}" alt="" loading="lazy">
+              <span class="gallery-thumb-idx">{{pad2 (add $i 1)}}</span>
+            </button>
+            {{- end}}
+          </div>
+          {{- end}}
           {{- end}}
         </div>
         {{- if .Title}}<figcaption class="media-title-v">{{.Title}}</figcaption>{{- end}}
@@ -56,6 +87,9 @@
     <div class="info-wrapper">
       <div class="info-grid">
         <div class="info-label">Plate</div><div class="info-value">{{pad3 .Item.ID}}</div>
+        {{- if .Item.MultiImage}}
+        <div class="info-label">Series</div><div class="info-value">{{.Item.GalleryCount}} images</div>
+        {{- end}}
         {{- if .Item.CategoryName}}
         <div class="info-label">Category</div>
         <div class="info-value"><a href="/category/{{.Item.CategorySlug}}">{{.Item.CategoryName}}</a></div>
@@ -65,6 +99,13 @@
         {{- if .Item.FileName}}
         <div class="info-label">File</div>
         <div class="info-value"><a href="{{.Item.FileURL}}" download>{{fileext .Item.FileName}} · {{filesize .Item.FileSize}}</a></div>
+        {{- end}}
+        {{- if .Item.DominantColor}}
+        {{- $cb := colorBucket .Item.DominantColor}}
+        {{- if $cb}}
+        <div class="info-label">Palette</div>
+        <div class="info-value"><a href="/?color={{$cb}}" class="detail-swatch-link"><span class="detail-swatch" style="background:{{.Item.DominantColor}}"></span>{{$cb}}</a></div>
+        {{- end}}
         {{- end}}
         {{- if .Item.SourceURL}}
         <div class="info-label">Source</div>
@@ -113,10 +154,18 @@
 
   <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer" tabindex="-1">
     <div class="lightbox-toolbar">
-      <a class="lightbox-open" id="lightbox-open" href="#" target="_blank" rel="noopener">Open original</a>
+      <span class="lightbox-counter" id="lightbox-counter" hidden></span>
+      <a class="lightbox-open" id="lightbox-open" href="#" target="_blank" rel="noopener">Open original &#8599;</a>
       <button type="button" class="modal-close lightbox-close" id="lightbox-close" aria-label="Close image viewer">&times;</button>
     </div>
+    <button type="button" class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Previous image" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
     <img id="lightbox-img" src="" alt="">
+    <button type="button" class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Next image" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="lightbox-caption" id="lightbox-caption" hidden></div>
   </div>
 
   {{template "tail" .}}
