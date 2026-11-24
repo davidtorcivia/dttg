@@ -52,6 +52,11 @@ func (v itemView) GalleryCount() int {
 	return v.ImageCount
 }
 
+// PaletteSwatches returns up to 5 perceptual OKLab hex swatches for this item.
+func (v itemView) PaletteSwatches() []string {
+	return store.ItemPalette(v.DominantColor, v.Palette)
+}
+
 // metaTags drives SEO / Open Graph / Twitter Card output.
 type metaTags struct {
 	Description string
@@ -348,6 +353,11 @@ func (s *Server) handleSearchCards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" && wantsMarkdown(r) {
+		w.Header().Set("Vary", "Accept")
+		s.handleLLMsTxt(w, r)
+		return
+	}
 	colorFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("color")))
 	if !store.ValidColorBucket(colorFilter) {
 		colorFilter = ""
@@ -428,7 +438,12 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	rawID := r.PathValue("id")
+	if strings.HasSuffix(rawID, ".md") || wantsMarkdown(r) {
+		s.handleItemMarkdown(w, r)
+		return
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil {
 		s.notFound(w, r)
 		return

@@ -128,6 +128,7 @@ func (s *Server) handleRobots(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("User-agent: *\n" +
 		"Disallow: /admin\n" +
 		"Disallow: /api/\n" +
+		"Allow: /api/v1/\n" +
 		"Allow: /\n" +
 		"Sitemap: " + s.siteBaseURL() + "/sitemap.xml\n"))
 }

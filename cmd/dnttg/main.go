@@ -76,6 +76,8 @@ func main() {
 		run(func(st *store.Store) error { return backfillVariants(ctx, st, mustMedia(cfg)) })
 	case "refresh-tweets":
 		run(func(st *store.Store) error { return refreshTweets(ctx, st, mustMedia(cfg)) })
+	case "recolor":
+		run(func(st *store.Store) error { return recolor(ctx, st, mustMedia(cfg)) })
 	case "backup":
 		if !cfg.BackupsEnabled() {
 			log.Fatal("backups not configured (set R2_* and R2_BACKUP_BUCKET)")
@@ -96,7 +98,7 @@ func main() {
 	case "token":
 		run(func(st *store.Store) error { return runToken(ctx, st, os.Args[2:]) })
 	default:
-		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|refresh-tweets|backup|reset-content|set-password|token)", cmd)
+		log.Fatalf("unknown command %q (serve|migrate|ready|seed|reconcile|backfill-variants|refresh-tweets|recolor|backup|reset-content|set-password|token)", cmd)
 	}
 }
 

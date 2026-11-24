@@ -264,7 +264,7 @@ func (s *Service) Create(ctx context.Context, in Input) (int64, error) {
 		rows = mRows
 		switch {
 		case len(imgs) > 0:
-			applyCoverFromImage(&it, imgs[0], len(imgs))
+			applyCoverFromImages(&it, imgs)
 			it.Images = imgs
 		case it.Kind != "image": // a link/embed preview that failed to decode: no cover
 		case rawURL != "":
@@ -309,11 +309,16 @@ func validateHTTPURL(raw string) error {
 	return nil
 }
 
-func applyCoverFromImage(it *store.Item, img store.ItemImage, count int) {
-	it.CoverKey, it.ThumbKey, it.SmallKey = img.CoverKey, img.ThumbKey, img.SmallKey
-	it.Placeholder, it.DominantColor = img.Placeholder, img.DominantColor
-	it.Width, it.Height = img.Width, img.Height
-	it.ImageCount = count
+func applyCoverFromImages(it *store.Item, imgs []store.ItemImage) {
+	if len(imgs) == 0 {
+		return
+	}
+	first := imgs[0]
+	it.CoverKey, it.ThumbKey, it.SmallKey = first.CoverKey, first.ThumbKey, first.SmallKey
+	it.Placeholder = first.Placeholder
+	it.DominantColor, it.Palette = store.SeriesColors(imgs)
+	it.Width, it.Height = first.Width, first.Height
+	it.ImageCount = len(imgs)
 }
 
 // fetchPhotosConcurrent downloads up to maxGalleryImgs photos concurrently with
@@ -580,7 +585,7 @@ func (s *Service) ReplaceFiles(ctx context.Context, itemID int64, files []Upload
 		if len(imgs) == 0 {
 			return fmt.Errorf("process image: %w", decErr)
 		}
-		applyCoverFromImage(&next, imgs[0], len(imgs))
+		applyCoverFromImages(&next, imgs)
 		next.Images = imgs
 		rows = mRows
 	} else {
@@ -778,6 +783,7 @@ func (s *Service) storeImageEntry(ctx context.Context, private bool, raw []byte,
 		SmallKey:      smallKey,
 		Placeholder:   proc.Placeholder,
 		DominantColor: proc.DominantColor,
+		Palette:       proc.PaletteCSV(),
 		Width:         proc.Width,
 		Height:        proc.Height,
 		Alt:           alt,

@@ -24,7 +24,7 @@
       {{- if $fitMedia}}
       <figure class="media-frame">
         <div class="media-col">
-          <div class="media-stage{{if $isSeries}} media-stage--gallery{{end}}"{{if $isSeries}} id="detail-gallery" data-gallery="{{.GalleryJSON}}" style="--plate-color:{{if .DominantColor}}{{.DominantColor}}{{else}}transparent{{end}}"{{end}}>
+          <div class="media-stage{{if $isSeries}} media-stage--gallery{{end}}"{{if $isSeries}} id="detail-gallery" data-gallery="{{.GalleryJSON}}" style="--plate-color:{{with (index .Images 0)}}{{if .DominantColor}}{{.DominantColor}}{{else}}transparent{{end}}{{else}}{{if .DominantColor}}{{.DominantColor}}{{else}}transparent{{end}}{{end}}"{{end}}>
             {{- if $isVideoFile}}
             <video class="detail-video" src="{{.FileURL}}" autoplay loop muted playsinline preload="metadata"></video>
             {{- else}}
@@ -107,11 +107,20 @@
         <div class="info-label">File</div>
         <div class="info-value"><a href="{{.Item.FileURL}}" download>{{fileext .Item.FileName}} · {{filesize .Item.FileSize}}</a></div>
         {{- end}}
-        {{- if .Item.DominantColor}}
-        {{- $cb := colorBucket .Item.DominantColor}}
+        {{- $swatches := .Item.PaletteSwatches}}
+        {{- if $swatches}}
+        {{- $cb := colorBucket (index $swatches 0)}}
         {{- if $cb}}
         <div class="info-label">Palette</div>
-        <div class="info-value"><a href="/?color={{$cb}}" class="detail-swatch-link"><span class="detail-swatch" style="background:{{.Item.DominantColor}}"></span>{{$cb}}</a></div>
+        <div class="info-value">
+          <div class="detail-palette">
+            {{- range $sw := $swatches}}
+            {{- $b := colorBucket $sw}}
+            <a href="/?color={{$b}}" class="detail-swatch-chip" title="{{$sw}} · {{bucketLabel $b}}" aria-label="Filter by {{bucketLabel $b}} ({{$sw}})"><span class="detail-swatch" style="background:{{$sw}}"></span></a>
+            {{- end}}
+            <a href="/?color={{$cb}}" class="detail-swatch-label">{{bucketLabel $cb}}</a>
+          </div>
+        </div>
         {{- end}}
         {{- end}}
         {{- if .Item.SourceURL}}

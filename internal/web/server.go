@@ -68,6 +68,7 @@ func parseTemplates() (*template.Template, error) {
 		"sub":         func(a, b int) int { return a - b },
 		"isTweetURL":  ingest.IsTweetURL,
 		"colorBucket": store.ColorBucket,
+		"bucketLabel": store.BucketLabel,
 		"filesize":    humanSize,
 		"fileext":   fileExt,
 		"host":      hostname,
@@ -209,12 +210,38 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats", s.handleAPIStats)
 	mux.HandleFunc("POST /api/translate", s.handleTranslate)
 	mux.HandleFunc("GET /board/more", s.handleBoardMore)
-	// Feeds are CORS-open so cross-origin browser apps can fetch them directly
-	// (a simple GET sends no preflight; the header on the response is enough).
+	// Feeds & LLM discovery are CORS-open so cross-origin browser apps and
+	// agentic clients can fetch them directly.
 	mux.HandleFunc("GET /feed.json", cors(s.handleFeedJSON))
 	mux.HandleFunc("GET /feed.xml", cors(s.handleFeedRSS))
 	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
+	mux.HandleFunc("GET /llms.txt", cors(s.handleLLMsTxt))
+	mux.HandleFunc("GET /llms-full.txt", cors(s.handleLLMsFullTxt))
+	mux.HandleFunc("GET /.well-known/mcp.json", cors(s.handleWellKnownMCP))
+
+	// Public read-only Discovery API v1 (optional bearer token unlocks private items)
+	mux.HandleFunc("GET /api/v1/overview", cors(s.handleAPIV1Overview))
+	mux.HandleFunc("OPTIONS /api/v1/overview", cors(s.handleAPIV1Overview))
+	mux.HandleFunc("GET /api/v1/items", cors(s.handleAPIV1Items))
+	mux.HandleFunc("OPTIONS /api/v1/items", cors(s.handleAPIV1Items))
+	mux.HandleFunc("GET /api/v1/items/{id}", cors(s.handleAPIV1Item))
+	mux.HandleFunc("OPTIONS /api/v1/items/{id}", cors(s.handleAPIV1Item))
+	mux.HandleFunc("GET /api/v1/random", cors(s.handleAPIV1Random))
+	mux.HandleFunc("OPTIONS /api/v1/random", cors(s.handleAPIV1Random))
+	mux.HandleFunc("GET /api/v1/walk", cors(s.handleAPIV1Walk))
+	mux.HandleFunc("OPTIONS /api/v1/walk", cors(s.handleAPIV1Walk))
+	mux.HandleFunc("GET /api/v1/palette", cors(s.handleAPIV1Palette))
+	mux.HandleFunc("OPTIONS /api/v1/palette", cors(s.handleAPIV1Palette))
+	mux.HandleFunc("GET /api/v1/taxonomy", cors(s.handleAPIV1Taxonomy))
+	mux.HandleFunc("OPTIONS /api/v1/taxonomy", cors(s.handleAPIV1Taxonomy))
+
+	// Native Streamable HTTP Model Context Protocol (MCP) server
+	mcpHandler := mcpCORS(s.handleMCP)
+	mux.HandleFunc("POST /mcp", mcpHandler)
+	mux.HandleFunc("GET /mcp", mcpHandler)
+	mux.HandleFunc("DELETE /mcp", mcpHandler)
+	mux.HandleFunc("OPTIONS /mcp", mcpHandler)
 
 	mux.HandleFunc("GET /login", noStore(s.handleLoginForm))
 	mux.HandleFunc("POST /login", noStore(s.handleLoginSubmit)) // no CSRF: no session yet (login CSRF is benign)

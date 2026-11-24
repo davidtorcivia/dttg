@@ -10,6 +10,10 @@
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <link rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
   <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
+  <link rel="alternate" type="text/plain" title="LLMs Index" href="/llms.txt">
+  {{- if .Item}}
+  <link rel="alternate" type="text/markdown" title="Markdown" href="{{.Item.DetailURL}}.md">
+  {{- end}}
   <link rel="preload" href="/static/fonts/outfit-latin-300-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/fonts/outfit-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{asset "/static/css/app.css"}}">

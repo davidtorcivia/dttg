@@ -347,9 +347,10 @@ type Category struct {
 }
 
 type Tag struct {
-	ID   int64
-	Slug string
-	Name string
+	ID    int64
+	Slug  string
+	Name  string
+	Count int
 }
 
 // ListCategories returns categories with item counts. Public callers only see
@@ -400,15 +401,18 @@ func attachTags(ctx context.Context, tx *sql.Tx, itemID int64, names []string) e
 	return nil
 }
 
-// ListTags returns tags, most-used first (then alphabetical). Public callers only
-// see tags attached to at least one public item.
+// ListTags returns tags with item counts, most-used first (then alphabetical).
+// Public callers only see tags attached to at least one public item.
 func (s *Store) ListTags(ctx context.Context, includePrivate bool) ([]Tag, error) {
-	return queryAll(ctx, s.rdb, scanTag, `
-		SELECT t.id, t.slug, t.name FROM tags t
+	return queryAll(ctx, s.rdb, func(sc rowScanner) (Tag, error) {
+		var t Tag
+		return t, sc.Scan(&t.ID, &t.Slug, &t.Name, &t.Count)
+	}, `
+		SELECT t.id, t.slug, t.name, COUNT(i.id) AS cnt FROM tags t
 		LEFT JOIN item_tags it ON it.tag_id = t.id
 		LEFT JOIN items i ON i.id = it.item_id AND (?1 OR i.visibility='public')
-		GROUP BY t.id HAVING ?1 OR COUNT(i.id) > 0
-		ORDER BY COUNT(i.id) DESC, t.name`, includePrivate)
+		GROUP BY t.id HAVING ?1 OR cnt > 0
+		ORDER BY cnt DESC, t.name`, includePrivate)
 }
 
 func scanTag(sc rowScanner) (Tag, error) {
@@ -452,6 +456,7 @@ type ItemImage struct {
 	SmallKey      string
 	Placeholder   string
 	DominantColor string
+	Palette       string // comma-separated #rrggbb swatches (up to 5)
 	Width         int
 	Height        int
 	Alt           string
@@ -483,6 +488,7 @@ type Item struct {
 	FileMime        string
 	FileSize        int64
 	DominantColor   string
+	Palette         string // comma-separated #rrggbb swatches (aggregated for multi-image series)
 	Width           int
 	Height          int
 	ImageCount      int
@@ -498,7 +504,7 @@ const itemColumns = `
 	i.id, i.kind, i.title, i.note, i.source_url, i.visibility,
 	COALESCE(i.category_id,0), COALESCE(c.slug,''), COALESCE(c.name,''),
 	i.link_title, i.link_description, i.link_site_name, i.embed_provider, i.embed_html,
-	i.cover_remote_url, i.cover_key, i.thumb_key, i.small_key, i.placeholder, i.dominant_color, i.width, i.height,
+	i.cover_remote_url, i.cover_key, i.thumb_key, i.small_key, i.placeholder, i.dominant_color, i.palette, i.width, i.height,
 	i.image_count, i.content_hash,
 	i.created_at, i.updated_at, i.published_at,
 	i.file_key, i.file_name, i.file_mime, i.file_size`
@@ -517,7 +523,7 @@ func scanItem(sc rowScanner) (Item, error) {
 	err := sc.Scan(&it.ID, &it.Kind, &it.Title, &it.Note, &it.SourceURL, &it.Visibility,
 		&it.CategoryID, &it.CategorySlug, &it.CategoryName,
 		&it.LinkTitle, &it.LinkDescription, &it.LinkSiteName, &it.EmbedProvider, &it.EmbedHTML,
-		&it.CoverRemoteURL, &it.CoverKey, &it.ThumbKey, &it.SmallKey, &it.Placeholder, &it.DominantColor, &it.Width, &it.Height,
+		&it.CoverRemoteURL, &it.CoverKey, &it.ThumbKey, &it.SmallKey, &it.Placeholder, &it.DominantColor, &it.Palette, &it.Width, &it.Height,
 		&it.ImageCount, &it.ContentHash,
 		&createdAt, &updatedAt, &published,
 		&it.FileKey, &it.FileName, &it.FileMime, &it.FileSize)
@@ -533,13 +539,13 @@ func scanItemImage(sc rowScanner) (ItemImage, error) {
 	var img ItemImage
 	var createdAt int64
 	err := sc.Scan(&img.ID, &img.ItemID, &img.Position, &img.CoverKey, &img.ThumbKey, &img.SmallKey,
-		&img.Placeholder, &img.DominantColor, &img.Width, &img.Height, &img.Alt, &createdAt)
+		&img.Placeholder, &img.DominantColor, &img.Palette, &img.Width, &img.Height, &img.Alt, &createdAt)
 	img.CreatedAt = unixUTC(createdAt)
 	return img, err
 }
 
 const itemImageSelect = `SELECT id, item_id, position, cover_key, thumb_key, small_key,
-	placeholder, dominant_color, width, height, alt, created_at FROM item_images `
+	placeholder, dominant_color, palette, width, height, alt, created_at FROM item_images `
 
 type ItemFilter struct {
 	IncludePrivate bool
@@ -548,13 +554,17 @@ type ItemFilter struct {
 	TagSlug        string
 	Kind           string // optional filter: image|link|text|embed|document
 	Visibility     string // optional explicit filter: public|private (admin)
-	Query          string // optional text search filter (admin)
+	Query          string // optional text search filter (admin/api)
 	Color          string // optional palette bucket: red|orange|yellow|green|blue|violet|light|neutral|dark
+	MultiOnly      bool   // only items with 2+ gallery images
+	IncludeTags    bool   // batch-load Tags on returned items
+	CreatedFrom    int64  // optional inclusive unix timestamp lower bound
+	CreatedTo      int64  // optional inclusive unix timestamp upper bound
 	Limit          int
 	// Keyset cursor: when both set, return items strictly older than (BeforeCreated, BeforeID).
 	BeforeCreated int64
 	BeforeID      int64
-	// Offset is retained only for sitemap chunking; prefer keyset for board scroll.
+	// Offset is retained for sitemap chunking and API pagination; prefer keyset for board scroll.
 	Offset int
 }
 
@@ -585,8 +595,19 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 		where = append(where, "i.kind = ?")
 		args = append(args, f.Kind)
 	}
+	if f.MultiOnly {
+		where = append(where, "i.image_count > 1")
+	}
+	if f.CreatedFrom > 0 {
+		where = append(where, "i.created_at >= ?")
+		args = append(args, f.CreatedFrom)
+	}
+	if f.CreatedTo > 0 {
+		where = append(where, "i.created_at <= ?")
+		args = append(args, f.CreatedTo)
+	}
 	if f.Color != "" {
-		where = append(where, "i.dominant_color != ''")
+		where = append(where, "(i.dominant_color != '' OR i.palette != '')")
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like := "%" + likeEscaper.Replace(strings.ToLower(q)) + "%"
@@ -603,7 +624,7 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 		args = append(args, f.BeforeCreated, f.BeforeCreated, f.BeforeID)
 	}
 	q := `SELECT` + cols + itemFrom + ` WHERE ` + strings.Join(where, " AND ") + ` ORDER BY i.created_at DESC, i.id DESC`
-	// Color filtering runs in Go over HSL buckets; scan without SQL LIMIT then slice to f.Limit.
+	// Color filtering runs in Go over perceptual OKLCH buckets; scan without SQL LIMIT then slice.
 	if f.Limit > 0 && f.Color == "" {
 		q += " LIMIT ? OFFSET ?"
 		args = append(args, f.Limit, f.Offset)
@@ -614,8 +635,13 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 	}
 	if f.Color != "" {
 		filtered := make([]Item, 0, len(items))
+		skipped := 0
 		for _, it := range items {
-			if ColorBucket(it.DominantColor) == f.Color {
+			if ItemMatchesBucket(it.DominantColor, it.Palette, f.Color) {
+				if skipped < f.Offset {
+					skipped++
+					continue
+				}
 				filtered = append(filtered, it)
 				if f.Limit > 0 && len(filtered) >= f.Limit {
 					break
@@ -627,7 +653,67 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 	if err := s.attachMultiImages(ctx, items); err != nil {
 		return nil, err
 	}
+	if f.IncludeTags {
+		if err := s.AttachTags(ctx, items); err != nil {
+			return nil, err
+		}
+	}
 	return items, nil
+}
+
+// AttachTags batch-loads tags for all items in one IN query.
+func (s *Store) AttachTags(ctx context.Context, items []Item) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]any, len(items))
+	placeholders := make([]string, len(items))
+	idxByID := make(map[int64]int, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+		placeholders[i] = "?"
+		idxByID[items[i].ID] = i
+	}
+	type itemTag struct {
+		itemID int64
+		tag    Tag
+	}
+	rows, err := queryAll(ctx, s.rdb, func(sc rowScanner) (itemTag, error) {
+		var r itemTag
+		return r, sc.Scan(&r.itemID, &r.tag.ID, &r.tag.Slug, &r.tag.Name)
+	}, `SELECT it.item_id, t.id, t.slug, t.name FROM item_tags it
+		JOIN tags t ON t.id = it.tag_id
+		WHERE it.item_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY it.item_id, t.name`, ids...)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if idx, ok := idxByID[r.itemID]; ok {
+			items[idx].Tags = append(items[idx].Tags, r.tag)
+		}
+	}
+	return nil
+}
+
+// KindCounts returns the number of items per kind (respecting visibility).
+func (s *Store) KindCounts(ctx context.Context, includePrivate bool) (map[string]int, error) {
+	type row struct {
+		kind  string
+		count int
+	}
+	rows, err := queryAll(ctx, s.rdb, func(sc rowScanner) (row, error) {
+		var r row
+		return r, sc.Scan(&r.kind, &r.count)
+	}, `SELECT kind, COUNT(*) FROM items WHERE ? OR visibility='public' GROUP BY kind`, includePrivate)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		out[r.kind] = r.count
+	}
+	return out, nil
 }
 
 // attachMultiImages batch-loads item_images for any items in the slice that have
@@ -839,13 +925,13 @@ func insertItem(ctx context.Context, ex execer, it Item) (int64, error) {
 	res, err := ex.ExecContext(ctx, `INSERT INTO items
 		(kind,title,note,source_url,visibility,category_id,
 		 link_title,link_description,link_site_name,embed_provider,embed_html,
-		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,image_count,content_hash,
+		 cover_remote_url,cover_key,thumb_key,small_key,placeholder,dominant_color,palette,width,height,image_count,content_hash,
 		 file_key,file_name,file_mime,file_size,
 		 created_at,updated_at,published_at)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
 		it.Kind, it.Title, it.Note, it.SourceURL, it.Visibility, nullID(it.CategoryID),
 		it.LinkTitle, it.LinkDescription, it.LinkSiteName, it.EmbedProvider, it.EmbedHTML,
-		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Width, it.Height, imgCount, it.ContentHash,
+		it.CoverRemoteURL, it.CoverKey, it.ThumbKey, it.SmallKey, it.Placeholder, it.DominantColor, it.Palette, it.Width, it.Height, imgCount, it.ContentHash,
 		it.FileKey, it.FileName, it.FileMime, it.FileSize,
 		created, now, published)
 	if err != nil {
@@ -861,10 +947,10 @@ func insertItemImages(ctx context.Context, tx *sql.Tx, itemID int64, imgs []Item
 			pos = i
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO item_images
-			(item_id,position,cover_key,thumb_key,small_key,placeholder,dominant_color,width,height,alt)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			(item_id,position,cover_key,thumb_key,small_key,placeholder,dominant_color,palette,width,height,alt)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			itemID, pos, img.CoverKey, img.ThumbKey, img.SmallKey, img.Placeholder,
-			img.DominantColor, img.Width, img.Height, img.Alt); err != nil {
+			img.DominantColor, img.Palette, img.Width, img.Height, img.Alt); err != nil {
 			return err
 		}
 	}
@@ -883,7 +969,7 @@ func (s *Store) CreateItemWithMediaAndTags(ctx context.Context, it Item, media [
 	if len(imgs) == 0 && it.CoverKey != "" {
 		imgs = []ItemImage{{
 			Position: 0, CoverKey: it.CoverKey, ThumbKey: it.ThumbKey, SmallKey: it.SmallKey,
-			Placeholder: it.Placeholder, DominantColor: it.DominantColor, Width: it.Width, Height: it.Height,
+			Placeholder: it.Placeholder, DominantColor: it.DominantColor, Palette: it.Palette, Width: it.Width, Height: it.Height,
 		}}
 	}
 	if len(imgs) > 0 {
@@ -943,7 +1029,7 @@ func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, m
 	if len(imgs) == 0 && next.CoverKey != "" {
 		imgs = []ItemImage{{
 			Position: 0, CoverKey: next.CoverKey, ThumbKey: next.ThumbKey, SmallKey: next.SmallKey,
-			Placeholder: next.Placeholder, DominantColor: next.DominantColor, Width: next.Width, Height: next.Height,
+			Placeholder: next.Placeholder, DominantColor: next.DominantColor, Palette: next.Palette, Width: next.Width, Height: next.Height,
 		}}
 	}
 	imgCount := len(imgs)
@@ -960,13 +1046,13 @@ func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, m
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE items SET
 				kind=?, cover_remote_url=?, cover_key=?, thumb_key=?, small_key=?, placeholder=?,
-				dominant_color=?, width=?, height=?, image_count=?,
+				dominant_color=?, palette=?, width=?, height=?, image_count=?,
 				file_key=?, file_name=?, file_mime=?, file_size=?,
 				embed_provider=?, embed_html=?,
 				updated_at=unixepoch()
 			WHERE id=?`,
 			next.Kind, next.CoverRemoteURL, next.CoverKey, next.ThumbKey, next.SmallKey, next.Placeholder,
-			next.DominantColor, next.Width, next.Height, imgCount,
+			next.DominantColor, next.Palette, next.Width, next.Height, imgCount,
 			next.FileKey, next.FileName, next.FileMime, next.FileSize,
 			next.EmbedProvider, next.EmbedHTML, itemID); err != nil {
 			return err
@@ -978,8 +1064,38 @@ func (s *Store) ReplaceItemMedia(ctx context.Context, itemID int64, next Item, m
 	})
 }
 
-// syncItemCover updates an item's cached cover columns and image_count to match
-// its current item_images rows (position 0 becomes the cover).
+// SeriesColors aggregates dominant color and a 5-swatch palette across all plates
+// of an item. Single-plate items keep their plate's exact dominant color and palette;
+// multi-plate series merge all plate palettes in OKLab space so every plate contributes.
+func SeriesColors(imgs []ItemImage) (dominant, paletteCSV string) {
+	if len(imgs) == 0 {
+		return "", ""
+	}
+	if len(imgs) == 1 {
+		dom := imgs[0].DominantColor
+		pal := PaletteToCSV(ItemPalette(imgs[0].DominantColor, imgs[0].Palette))
+		if dom == "" {
+			if sw := PaletteFromCSV(pal); len(sw) > 0 {
+				dom = sw[0]
+			}
+		}
+		return dom, pal
+	}
+	perPlate := make([][]string, 0, len(imgs))
+	for _, img := range imgs {
+		if sw := ItemPalette(img.DominantColor, img.Palette); len(sw) > 0 {
+			perPlate = append(perPlate, sw)
+		}
+	}
+	dom, pal := AggregatePalettes(perPlate, 5)
+	if dom == "" {
+		dom = imgs[0].DominantColor
+	}
+	return dom, PaletteToCSV(pal)
+}
+
+// syncItemCover updates an item's cached cover columns, aggregated series palette,
+// and image_count to match its current item_images rows (position 0 becomes the cover).
 func syncItemCover(ctx context.Context, tx *sql.Tx, itemID int64) error {
 	rows, err := tx.QueryContext(ctx, itemImageSelect+`WHERE item_id=? ORDER BY position ASC, id ASC`, itemID)
 	if err != nil {
@@ -1009,18 +1125,45 @@ func syncItemCover(ctx context.Context, tx *sql.Tx, itemID int64) error {
 	}
 	if len(imgs) == 0 {
 		_, err = tx.ExecContext(ctx, `UPDATE items SET
-			cover_key='', thumb_key='', small_key='', placeholder='', dominant_color='', width=0, height=0,
+			cover_key='', thumb_key='', small_key='', placeholder='', dominant_color='', palette='', width=0, height=0,
 			image_count=CASE WHEN cover_remote_url != '' THEN 1 ELSE 0 END,
 			updated_at=unixepoch() WHERE id=?`, itemID)
 		return err
 	}
 	c := imgs[0]
+	seriesDom, seriesPal := SeriesColors(imgs)
 	_, err = tx.ExecContext(ctx, `UPDATE items SET
-		cover_key=?, thumb_key=?, small_key=?, placeholder=?, dominant_color=?, width=?, height=?,
+		cover_key=?, thumb_key=?, small_key=?, placeholder=?, dominant_color=?, palette=?, width=?, height=?,
 		image_count=?, updated_at=unixepoch() WHERE id=?`,
-		c.CoverKey, c.ThumbKey, c.SmallKey, c.Placeholder, c.DominantColor, c.Width, c.Height,
+		c.CoverKey, c.ThumbKey, c.SmallKey, c.Placeholder, seriesDom, seriesPal, c.Width, c.Height,
 		len(imgs), itemID)
 	return err
+}
+
+// ImageColorUpdate carries recomputed OKLab colors for one item_images row.
+type ImageColorUpdate struct {
+	ImageID       int64
+	DominantColor string
+	Palette       string
+}
+
+// UpdateItemColors persists recomputed dominant color + palette on an item and
+// its gallery plates (used by the OKLab recolor backfill). Does not bump updated_at
+// unnecessarily unless desired, though bumping updated_at invalidates feed/API ETags.
+func (s *Store) UpdateItemColors(ctx context.Context, itemID int64, dominant, palette string, imgUpdates []ImageColorUpdate) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, u := range imgUpdates {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE item_images SET dominant_color=?, palette=? WHERE id=? AND item_id=?`,
+				u.DominantColor, u.Palette, u.ImageID, itemID); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx,
+			`UPDATE items SET dominant_color=?, palette=?, updated_at=unixepoch() WHERE id=?`,
+			dominant, palette, itemID)
+		return err
+	})
 }
 
 // AddItemImages appends one or more processed images + their media rows to an

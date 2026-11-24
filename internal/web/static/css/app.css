@@ -62,8 +62,12 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .active-filter { display:flex; flex-wrap:wrap; align-items:center; gap:.75rem; margin-bottom:2rem; font-size:.68rem; letter-spacing:.11em; text-transform:uppercase; }
 .active-filter .cats-tag { display:inline-flex; align-items:center; gap:.45rem; padding:.28rem .65rem; border:1px solid var(--line); color:var(--text); text-decoration:none; transition:border-color var(--dur-1) ease; }
 .active-filter .cats-tag:hover { border-color:var(--text); }
+.detail-palette { display:inline-flex; align-items:center; gap:.35rem; flex-wrap:wrap; }
+.detail-swatch-chip { display:inline-flex; align-items:center; border-bottom:none !important; transition:transform .22s var(--ease-glass); }
+.detail-swatch-chip:hover { transform:translateY(-1px); }
 .detail-swatch-link { display:inline-flex; align-items:center; gap:.45rem; }
-.detail-swatch { width:10px; height:10px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,.18); }
+.detail-swatch-label { margin-left:.25rem; }
+.detail-swatch { width:11px; height:11px; display:inline-block; border:1px solid rgba(0,0,0,.18); }
 :root[data-theme="dark"] .detail-swatch { border-color:rgba(255,255,255,.22); }
 
 /* ---------- masonry grid ---------- */

@@ -112,3 +112,102 @@ func refreshTweets(ctx context.Context, st *store.Store, ms media.Store) error {
 	fmt.Printf("refresh-tweets: checked %d tweets, updated %d items (+%d photos, %d errors)\n", checked, updated, addedTotal, failed)
 	return nil
 }
+
+// recolor recomputes perceptual OKLab dominant colors and 5-swatch palettes for
+// every image item and every gallery plate from its stored media blobs, then
+// aggregates multi-image series palettes onto the parent item row.
+func recolor(ctx context.Context, st *store.Store, ms media.Store) error {
+	items, err := st.ListItems(ctx, store.ItemFilter{IncludePrivate: true, Cards: true})
+	if err != nil {
+		return err
+	}
+	var updated, plates, failed int
+	for _, it := range items {
+		fullItem, err := st.GetItem(ctx, it.ID, true)
+		if err != nil || fullItem == nil {
+			continue
+		}
+		// Multi-image or item_images-backed item.
+		if len(fullItem.Images) > 0 {
+			var updates []store.ImageColorUpdate
+			updatedImgs := make([]store.ItemImage, len(fullItem.Images))
+			copy(updatedImgs, fullItem.Images)
+			anyOK := false
+			for i, img := range fullItem.Images {
+				key := firstNonEmptyKey(img.SmallKey, img.ThumbKey, img.CoverKey)
+				if key == "" {
+					continue
+				}
+				dom, pal, err := extractStoredPalette(ctx, ms, key)
+				if err != nil {
+					log.Printf("item %d plate %d (%s): %v", it.ID, img.ID, key, err)
+					failed++
+					continue
+				}
+				palCSV := store.PaletteToCSV(pal)
+				updatedImgs[i].DominantColor = dom
+				updatedImgs[i].Palette = palCSV
+				updates = append(updates, store.ImageColorUpdate{
+					ImageID:       img.ID,
+					DominantColor: dom,
+					Palette:       palCSV,
+				})
+				plates++
+				anyOK = true
+			}
+			if !anyOK {
+				continue
+			}
+			seriesDom, seriesPal := store.SeriesColors(updatedImgs)
+			if err := st.UpdateItemColors(ctx, it.ID, seriesDom, seriesPal, updates); err != nil {
+				log.Printf("item %d update colors: %v", it.ID, err)
+				failed++
+				continue
+			}
+			updated++
+			continue
+		}
+		// Legacy single-cover item without item_images rows.
+		key := firstNonEmptyKey(fullItem.SmallKey, fullItem.ThumbKey, fullItem.CoverKey)
+		if key == "" {
+			continue
+		}
+		dom, pal, err := extractStoredPalette(ctx, ms, key)
+		if err != nil {
+			log.Printf("item %d (%s): %v", it.ID, key, err)
+			failed++
+			continue
+		}
+		if err := st.UpdateItemColors(ctx, it.ID, dom, store.PaletteToCSV(pal), nil); err != nil {
+			log.Printf("item %d update colors: %v", it.ID, err)
+			failed++
+			continue
+		}
+		plates++
+		updated++
+	}
+	fmt.Printf("recolor: updated %d items (%d plates, %d errors)\n", updated, plates, failed)
+	return nil
+}
+
+func firstNonEmptyKey(keys ...string) string {
+	for _, k := range keys {
+		if k != "" {
+			return k
+		}
+	}
+	return ""
+}
+
+func extractStoredPalette(ctx context.Context, ms media.Store, key string) (string, []string, error) {
+	rc, err := ms.Open(ctx, key)
+	if err != nil {
+		return "", nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(rc, 32<<20))
+	_ = rc.Close()
+	if err != nil {
+		return "", nil, err
+	}
+	return ingest.ExtractPaletteFromBytes(data, 5)
+}
