@@ -73,7 +73,25 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 :root[data-theme="dark"] .detail-swatch { border-color:rgba(255,255,255,.22); }
 
 /* ---------- masonry grid ---------- */
-.grid { display:block; }
+/* Render at the exact responsive column width via CSS Grid from byte 0 so eager
+   top-row plates paint immediately at their final pixel size (zero full-width flash
+   before JS hydrates the shortest-column masonry flex columns). */
+.grid {
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:0 2.2rem;
+  align-items:start;
+}
+@media (min-width:1600px) {
+  .grid { grid-template-columns:repeat(var(--cols, 3), minmax(0, 1fr)); }
+}
+@media (max-width:1000px) {
+  .grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width:600px) {
+  .grid { grid-template-columns:1fr; }
+}
+.grid > .empty, .grid > .sheet { grid-column:1 / -1; }
 .grid.grid--cols { display:flex; align-items:flex-start; gap:2.2rem; }
 .grid-col { flex:1 1 0; min-width:0; display:flex; flex-direction:column; }
 .card { display:flex; gap:.8rem; align-items:stretch; margin-bottom:3.75rem; cursor:pointer; text-decoration:none; color:inherit; opacity:0; transform:translateY(20px); transition:opacity .52s var(--ease-glass), transform .52s var(--ease-glass); }
