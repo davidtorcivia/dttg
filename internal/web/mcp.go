@@ -19,17 +19,37 @@ import (
 )
 
 // Native Streamable HTTP Model Context Protocol (MCP) server at /mcp.
-// Implements JSON-RPC 2.0 over HTTP per MCP 2025-03-26 (compatible with 2024-11-05)
-// with zero external dependencies. Anonymous clients receive full public read +
-// vision inspection tools; valid bearer-token callers unlock private visibility
-// plus archive_item, curate_item, and list_unannotated.
+// Implements JSON-RPC 2.0 over HTTP supporting the latest MCP 2026-07-28
+// stateless core (server/discover, per-request protocol headers, structuredContent,
+// cache hints) plus full backwards compatibility with 2025-11-25, 2025-06-18,
+// 2025-03-26, and 2024-11-05 handshake clients. Anonymous clients receive full
+// public read + vision inspection tools; valid bearer-token callers unlock
+// private visibility plus archive_item, curate_item, and list_unannotated.
 
 const (
-	mcpProtocolLatest = "2025-03-26"
-	mcpMaxBodyBytes   = 2 << 20 // 2 MB JSON-RPC request cap
-	mcpMaxImageBytes  = 512 << 10
-	mcpMaxInlineImgs  = 4
+	mcpProtocolLatest    = "2026-07-28"
+	mcpHandshakeLatest   = "2025-11-25"
+	mcpMaxBodyBytes      = 2 << 20 // 2 MB JSON-RPC request cap
+	mcpMaxImageBytes     = 512 << 10
+	mcpMaxInlineImgs     = 4
 )
+
+var mcpSupportedVersions = []string{
+	"2026-07-28",
+	"2025-11-25",
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05",
+}
+
+func mcpVersionSupported(v string) bool {
+	for _, s := range mcpSupportedVersions {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -70,7 +90,7 @@ func mcpCORS(next http.HandlerFunc) http.HandlerFunc {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-API-Token, Mcp-Session-Id, MCP-Protocol-Version")
+		h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-API-Token, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name")
 		h.Set("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version")
 		h.Set("Access-Control-Max-Age", "86400")
 		if r.Method == http.MethodOptions {
@@ -181,11 +201,62 @@ func newMCPSessionID() string {
 	return hex.EncodeToString(b)
 }
 
+func (s *Server) mcpServerInfo() map[string]any {
+	id := s.siteID()
+	return map[string]any{
+		"name":    "donottouchtheglass",
+		"title":   id.Title,
+		"version": "1.0.0",
+		"icons": []map[string]any{
+			{"src": s.absURL("/favicon.svg"), "mimeType": "image/svg+xml"},
+			{"src": s.absURL("/static/icons/icon-192.png"), "mimeType": "image/png", "sizes": []string{"192x192"}},
+		},
+	}
+}
+
+func (s *Server) mcpInstructions(authed bool) string {
+	id := s.siteID()
+	instructions := fmt.Sprintf(
+		"You are connected to %s (%s), a curated visual & archival collection. "+
+			"Use archive_overview to orient yourself, browse_archive or search_archive to find plates, "+
+			"color_palette to explore by OKLab perceptual color or hex proximity, curatorial_walk to trace associative visual/thematic threads, "+
+			"serendipity for random inspiration, and get_item (with include_images=true when you have vision) to inspect plates closely.",
+		id.Title, s.siteBaseURL(),
+	)
+	if authed {
+		instructions += " Authenticated mode is active: private items are visible and archive_item, curate_item, and list_unannotated are unlocked."
+	}
+	return instructions
+}
+
 func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequest, tokenHash string, authed bool) *rpcResponse {
 	// Notifications have no id (or null id) and expect no JSON-RPC response body.
 	isNotification := len(req.ID) == 0 || string(req.ID) == "null"
 	if strings.HasPrefix(req.Method, "notifications/") {
 		return nil
+	}
+
+	// Echo negotiated protocol version header per Streamable HTTP / 2026-07-28 spec.
+	reqVer := strings.TrimSpace(r.Header.Get("MCP-Protocol-Version"))
+	if reqVer == "" && len(req.Params) > 0 {
+		var metaWrap struct {
+			Meta map[string]any `json:"_meta"`
+		}
+		if json.Unmarshal(req.Params, &metaWrap) == nil {
+			if v, ok := metaWrap.Meta["io.modelcontextprotocol/protocolVersion"].(string); ok {
+				reqVer = strings.TrimSpace(v)
+			}
+		}
+	}
+	if mcpVersionSupported(reqVer) {
+		w.Header().Set("MCP-Protocol-Version", reqVer)
+	} else if w.Header().Get("MCP-Protocol-Version") == "" {
+		w.Header().Set("MCP-Protocol-Version", mcpProtocolLatest)
+	}
+
+	cacheScope := "public"
+	if authed {
+		cacheScope = "private"
 	}
 
 	okResp := func(res any) *rpcResponse {
@@ -202,14 +273,33 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 	}
 
 	switch req.Method {
+	case "server/discover":
+		// MCP 2026-07-28 stateless discovery endpoint.
+		w.Header().Set("MCP-Protocol-Version", mcpProtocolLatest)
+		return okResp(map[string]any{
+			"resultType":        "complete",
+			"supportedVersions": mcpSupportedVersions,
+			"capabilities": map[string]any{
+				"tools":     map[string]any{"listChanged": false},
+				"resources": map[string]any{"subscribe": false, "listChanged": false},
+				"prompts":   map[string]any{"listChanged": false},
+			},
+			"_meta": map[string]any{
+				"io.modelcontextprotocol/serverInfo": s.mcpServerInfo(),
+			},
+			"instructions": s.mcpInstructions(authed),
+			"ttlMs":        300000,
+			"cacheScope":   cacheScope,
+		})
+
 	case "initialize":
+		// Backwards-compatible handshake for 2024-11-05 .. 2025-11-25 (and 2026-07-28 if requested).
 		var params struct {
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		_ = json.Unmarshal(req.Params, &params)
-		ver := mcpProtocolLatest
-		switch params.ProtocolVersion {
-		case "2024-11-05", "2025-03-26", "2025-06-18":
+		ver := mcpHandshakeLatest
+		if mcpVersionSupported(params.ProtocolVersion) {
 			ver = params.ProtocolVersion
 		}
 		sid := r.Header.Get("Mcp-Session-Id")
@@ -218,17 +308,6 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 		}
 		w.Header().Set("Mcp-Session-Id", sid)
 		w.Header().Set("MCP-Protocol-Version", ver)
-		id := s.siteID()
-		instructions := fmt.Sprintf(
-			"You are connected to %s (%s), a curated visual & archival collection. "+
-				"Use archive_overview to orient yourself, browse_archive or search_archive to find plates, "+
-				"color_palette to explore by OKLab perceptual color or hex proximity, curatorial_walk to trace associative visual/thematic threads, "+
-				"serendipity for random inspiration, and get_item (with include_images=true when you have vision) to inspect plates closely.",
-			id.Title, s.siteBaseURL(),
-		)
-		if authed {
-			instructions += " Authenticated mode is active: private items are visible and archive_item, curate_item, and list_unannotated are unlocked."
-		}
 		return okResp(map[string]any{
 			"protocolVersion": ver,
 			"capabilities": map[string]any{
@@ -236,19 +315,19 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 				"resources": map[string]any{"subscribe": false, "listChanged": false},
 				"prompts":   map[string]any{"listChanged": false},
 			},
-			"serverInfo": map[string]any{
-				"name":    "donottouchtheglass",
-				"title":   id.Title,
-				"version": "1.0.0",
-			},
-			"instructions": instructions,
+			"serverInfo":   s.mcpServerInfo(),
+			"instructions": s.mcpInstructions(authed),
 		})
 
 	case "ping":
 		return okResp(map[string]any{})
 
 	case "tools/list":
-		return okResp(map[string]any{"tools": mcpToolDefinitions(authed)})
+		return okResp(map[string]any{
+			"tools":      mcpToolDefinitions(authed),
+			"ttlMs":      300000,
+			"cacheScope": cacheScope,
+		})
 
 	case "tools/call":
 		var params struct {
@@ -258,17 +337,23 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 		if err := json.Unmarshal(req.Params, &params); err != nil || params.Name == "" {
 			return errResp(-32602, "invalid tools/call params")
 		}
-		content, isErr, err := s.callMCPTool(r, params.Name, params.Arguments, tokenHash, authed)
+		content, structured, isErr, err := s.callMCPTool(r, params.Name, params.Arguments, tokenHash, authed)
 		if err != nil {
 			return errResp(-32602, err.Error())
 		}
-		return okResp(map[string]any{
+		res := map[string]any{
 			"content": content,
 			"isError": isErr,
-		})
+		}
+		if structured != nil && !isErr {
+			res["structuredContent"] = structured
+		}
+		return okResp(res)
 
 	case "resources/list":
 		return okResp(map[string]any{
+			"ttlMs":      300000,
+			"cacheScope": cacheScope,
 			"resources": []map[string]any{
 				{
 					"uri":         "dnttg://archive/overview",
@@ -293,6 +378,8 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 
 	case "resources/templates/list":
 		return okResp(map[string]any{
+			"ttlMs":      300000,
+			"cacheScope": cacheScope,
 			"resourceTemplates": []map[string]any{
 				{
 					"uriTemplate": "dnttg://item/{id}",
@@ -329,7 +416,11 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, req rpcRequ
 		return okResp(map[string]any{"contents": contents})
 
 	case "prompts/list":
-		return okResp(map[string]any{"prompts": mcpPromptDefinitions()})
+		return okResp(map[string]any{
+			"prompts":    mcpPromptDefinitions(),
+			"ttlMs":      300000,
+			"cacheScope": cacheScope,
+		})
 
 	case "prompts/get":
 		var params struct {
@@ -521,17 +612,21 @@ func mcpToolDefinitions(authed bool) []mcpToolDef {
 	return tools
 }
 
-func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessage, tokenHash string, authed bool) ([]mcpContent, bool, error) {
+func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessage, tokenHash string, authed bool) ([]mcpContent, any, bool, error) {
 	ctx := r.Context()
 	if len(rawArgs) == 0 {
 		rawArgs = []byte("{}")
+	}
+	jsonResult := func(v any) ([]mcpContent, any, bool, error) {
+		b, _ := json.MarshalIndent(v, "", "  ")
+		return []mcpContent{{Type: "text", Text: string(b)}}, v, false, nil
 	}
 	jsonText := func(v any) []mcpContent {
 		b, _ := json.MarshalIndent(v, "", "  ")
 		return []mcpContent{{Type: "text", Text: string(b)}}
 	}
-	errContent := func(msg string) ([]mcpContent, bool, error) {
-		return []mcpContent{{Type: "text", Text: msg}}, true, nil
+	errContent := func(msg string) ([]mcpContent, any, bool, error) {
+		return []mcpContent{{Type: "text", Text: msg}}, nil, true, nil
 	}
 
 	switch name {
@@ -540,7 +635,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		if err != nil {
 			return errContent("failed to load overview: " + err.Error())
 		}
-		return jsonText(ov), false, nil
+		return jsonResult(ov)
 
 	case "browse_archive":
 		var a struct {
@@ -557,7 +652,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			Offset         int     `json:"offset"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if a.Limit <= 0 {
 			a.Limit = 20
@@ -579,7 +674,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		if err != nil {
 			return errContent("browse failed: " + err.Error())
 		}
-		return jsonText(map[string]any{"count": len(items), "items": items}), false, nil
+		return jsonResult(map[string]any{"count": len(items), "items": items})
 
 	case "search_archive":
 		var a struct {
@@ -587,10 +682,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			Limit int    `json:"limit"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if strings.TrimSpace(a.Query) == "" {
-			return nil, false, errors.New("query is required")
+			return nil, nil, false, errors.New("query is required")
 		}
 		if a.Limit <= 0 {
 			a.Limit = 20
@@ -603,7 +698,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		if err != nil {
 			return errContent("search failed: " + err.Error())
 		}
-		return jsonText(map[string]any{"query": a.Query, "count": len(items), "items": items}), false, nil
+		return jsonResult(map[string]any{"query": a.Query, "count": len(items), "items": items})
 
 	case "get_item":
 		var a struct {
@@ -612,10 +707,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			MaxImages     int   `json:"max_images"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if a.ID <= 0 {
-			return nil, false, errors.New("id must be a positive integer")
+			return nil, nil, false, errors.New("id must be a positive integer")
 		}
 		detail, rawItem, err := s.queryItemDetail(ctx, a.ID, authed)
 		if err != nil {
@@ -632,7 +727,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			}
 			out = append(out, s.mcpItemImageBlocks(ctx, *rawItem, maxImgs)...)
 		}
-		return out, false, nil
+		return out, detail, false, nil
 
 	case "curatorial_walk":
 		var a struct {
@@ -642,17 +737,18 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			IncludeImages bool   `json:"include_images"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		walk, err := s.queryCuratorialWalk(ctx, a.StartID, a.Steps, a.Mode, authed)
 		if err != nil {
 			return errContent("curatorial walk failed: " + err.Error())
 		}
-		out := jsonText(map[string]any{
+		payload := map[string]any{
 			"mode":  firstNonEmpty(a.Mode, "balanced"),
 			"count": len(walk),
 			"steps": walk,
-		})
+		}
+		out := jsonText(payload)
 		if a.IncludeImages {
 			attached := 0
 			for _, st := range walk {
@@ -668,7 +764,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 				}
 			}
 		}
-		return out, false, nil
+		return out, payload, false, nil
 
 	case "color_palette":
 		var a struct {
@@ -677,7 +773,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			Limit    int     `json:"limit"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if hexColor := store.NormalizeHex(a.Hex); hexColor != "" {
 			if a.Limit <= 0 {
@@ -696,19 +792,19 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 				return errContent("palette search failed: " + err.Error())
 			}
 			bucket := store.ColorBucket(hexColor)
-			return jsonText(map[string]any{
+			return jsonResult(map[string]any{
 				"query_hex":    hexColor,
 				"bucket":       bucket,
 				"bucket_label": store.BucketLabel(bucket),
 				"count":        len(items),
 				"items":        items,
-			}), false, nil
+			})
 		}
 		buckets, err := s.queryPaletteSummary(ctx, authed)
 		if err != nil {
 			return errContent("palette summary failed: " + err.Error())
 		}
-		return jsonText(map[string]any{"buckets": buckets}), false, nil
+		return jsonResult(map[string]any{"buckets": buckets})
 
 	case "serendipity":
 		var a struct {
@@ -721,7 +817,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			IncludeImages  bool   `json:"include_images"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if a.Count <= 0 {
 			a.Count = 3
@@ -741,7 +837,8 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		if err != nil {
 			return errContent("serendipity failed: " + err.Error())
 		}
-		out := jsonText(map[string]any{"count": len(items), "items": items})
+		payload := map[string]any{"count": len(items), "items": items}
+		out := jsonText(payload)
 		if a.IncludeImages {
 			attached := 0
 			for _, it := range items {
@@ -757,7 +854,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 				}
 			}
 		}
-		return out, false, nil
+		return out, payload, false, nil
 
 	case "archive_item":
 		if !authed {
@@ -780,7 +877,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			Visibility string   `json:"visibility"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		in := ingest.Input{
 			URL:        strings.TrimSpace(a.URL),
@@ -806,7 +903,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		if dup != nil && dup.ID != id {
 			resp["duplicate_of"] = dup.ID
 		}
-		return jsonText(resp), false, nil
+		return jsonResult(resp)
 
 	case "curate_item":
 		if !authed {
@@ -828,10 +925,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			} `json:"plate_alts"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		if a.ID <= 0 {
-			return nil, false, errors.New("id must be a positive integer")
+			return nil, nil, false, errors.New("id must be a positive integer")
 		}
 		it, err := s.store.GetItem(ctx, a.ID, true)
 		if err != nil {
@@ -899,11 +996,11 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 		}
 		s.invalidateSiteCache()
 		detail, _, _ := s.queryItemDetail(ctx, a.ID, true)
-		return jsonText(map[string]any{
+		return jsonResult(map[string]any{
 			"updated":        true,
 			"updated_plates": updatedPlates,
 			"item":           detail.Item,
-		}), false, nil
+		})
 
 	case "list_unannotated":
 		if !authed {
@@ -914,7 +1011,7 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 			Limit   int    `json:"limit"`
 		}
 		if err := json.Unmarshal(rawArgs, &a); err != nil {
-			return nil, false, fmt.Errorf("invalid arguments: %w", err)
+			return nil, nil, false, fmt.Errorf("invalid arguments: %w", err)
 		}
 		missing := strings.ToLower(strings.TrimSpace(a.Missing))
 		if missing == "" {
@@ -966,10 +1063,10 @@ func (s *Server) callMCPTool(r *http.Request, name string, rawArgs json.RawMessa
 				}
 			}
 		}
-		return jsonText(map[string]any{"missing": missing, "count": len(out), "items": out}), false, nil
+		return jsonResult(map[string]any{"missing": missing, "count": len(out), "items": out})
 
 	default:
-		return nil, false, fmt.Errorf("unknown tool %q", name)
+		return nil, nil, false, fmt.Errorf("unknown tool %q", name)
 	}
 }
 

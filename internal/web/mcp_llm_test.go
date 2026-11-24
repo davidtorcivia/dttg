@@ -269,15 +269,33 @@ func TestMCPStreamableHTTPFlow(t *testing.T) {
 	h := s.Handler()
 	pubMultiID, _, privID, apiTok := seedLLMArchive(t, s)
 
-	// 1. Initialize
+	// 0. MCP 2026-07-28 stateless server/discover
+	discRec := postMCP(t, h, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "disc-1",
+		"method":  "server/discover",
+		"params": map[string]any{
+			"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28"},
+		},
+	}, "")
+	if discRec.Code != http.StatusOK || discRec.Header().Get("MCP-Protocol-Version") != "2026-07-28" {
+		t.Fatalf("server/discover failed: %d ver=%q body=%s", discRec.Code, discRec.Header().Get("MCP-Protocol-Version"), discRec.Body.String())
+	}
+	for _, want := range []string{`"resultType":"complete"`, `"2026-07-28"`, `"io.modelcontextprotocol/serverInfo"`, `"cacheScope":"public"`} {
+		if !strings.Contains(discRec.Body.String(), want) {
+			t.Errorf("server/discover missing %s in %s", want, discRec.Body.String())
+		}
+	}
+
+	// 1. Legacy initialize (2025-11-25)
 	rec := postMCP(t, h, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "initialize",
-		"params":  map[string]any{"protocolVersion": "2025-03-26"},
+		"params":  map[string]any{"protocolVersion": "2025-11-25"},
 	}, "")
-	if rec.Code != http.StatusOK || rec.Header().Get("Mcp-Session-Id") == "" {
-		t.Fatalf("initialize failed: %d session=%q body=%s", rec.Code, rec.Header().Get("Mcp-Session-Id"), rec.Body.String())
+	if rec.Code != http.StatusOK || rec.Header().Get("Mcp-Session-Id") == "" || rec.Header().Get("MCP-Protocol-Version") != "2025-11-25" {
+		t.Fatalf("initialize failed: %d session=%q ver=%q body=%s", rec.Code, rec.Header().Get("Mcp-Session-Id"), rec.Header().Get("MCP-Protocol-Version"), rec.Body.String())
 	}
 
 	// 2. Notification returns 202 Accepted with empty body
@@ -312,8 +330,9 @@ func TestMCPStreamableHTTPFlow(t *testing.T) {
 	}, "")
 	var callResp struct {
 		Result struct {
-			Content []mcpContent `json:"content"`
-			IsError bool         `json:"isError"`
+			Content           []mcpContent    `json:"content"`
+			StructuredContent json.RawMessage `json:"structuredContent"`
+			IsError           bool            `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &callResp); err != nil {
@@ -321,6 +340,9 @@ func TestMCPStreamableHTTPFlow(t *testing.T) {
 	}
 	if callResp.Result.IsError {
 		t.Fatalf("get_item returned error: %+v", callResp.Result.Content)
+	}
+	if len(callResp.Result.StructuredContent) == 0 || !strings.Contains(string(callResp.Result.StructuredContent), "Aegean Cobalt Series") {
+		t.Errorf("expected structuredContent on get_item response, got %s", string(callResp.Result.StructuredContent))
 	}
 	imgBlocks := 0
 	for _, c := range callResp.Result.Content {

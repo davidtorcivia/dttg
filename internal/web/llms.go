@@ -41,7 +41,7 @@ func (s *Server) handleLLMsTxt(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "Archive span: %s to %s.\n", ov.OldestItem[:10], ov.NewestItem[:10])
 	}
 	b.WriteString("\n## Model Context Protocol (MCP)\n\n")
-	fmt.Fprintf(&b, "- **Endpoint**: `%s` (Streamable HTTP, JSON-RPC 2.0, MCP 2025-03-26 / 2024-11-05)\n", ov.Endpoints["mcp"])
+	fmt.Fprintf(&b, "- **Endpoint**: `%s` (Streamable HTTP, JSON-RPC 2.0, MCP 2026-07-28 stateless core + backwards compatible with 2025-11-25 / 2025-06-18 / 2025-03-26 / 2024-11-05)\n", ov.Endpoints["mcp"])
 	fmt.Fprintf(&b, "- **Discovery**: `%s`\n", s.absURL("/.well-known/mcp.json"))
 	b.WriteString("- **Public Read + Vision Tools**: `archive_overview`, `browse_archive`, `search_archive`, `get_item` (supports `include_images: true` for vision models), `curatorial_walk` (associative visual/thematic drift), `color_palette` (perceptual OKLab ΔE matching), `serendipity`\n")
 	b.WriteString("- **Authenticated Write/Curate Tools** (`Authorization: Bearer <token>`): `archive_item`, `curate_item`, `list_unannotated`\n")
@@ -297,7 +297,8 @@ func (s *Server) handleWellKnownMCP(w http.ResponseWriter, r *http.Request) {
 		"mcp": map[string]any{
 			"endpoint":         s.absURL("/mcp"),
 			"transport":        "streamable-http",
-			"protocolVersions": []string{"2025-03-26", "2024-11-05"},
+			"protocolVersions": mcpSupportedVersions,
+			"stateless":        true,
 			"auth": map[string]any{
 				"public_read":  true,
 				"bearer_write": true,
