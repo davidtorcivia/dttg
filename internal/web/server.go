@@ -279,6 +279,8 @@ func (s *Server) Handler() http.Handler {
 	admin("POST /admin/items/{id}/delete", s.handleAdminDelete)
 	admin("GET /admin/settings", s.handleAdminSettings)
 	admin("POST /admin/settings", s.handleAdminSettingsSave)
+	admin("POST /admin/tokens/create", s.handleAdminTokenCreate)
+	admin("POST /admin/tokens/rotate", s.handleAdminTokenRotate)
 	admin("POST /admin/tokens/revoke", s.handleAdminTokenRevoke)
 	admin("POST /admin/sessions/revoke-others", s.handleAdminRevokeOtherSessions)
 	admin("GET /admin/maintenance", s.handleMaintenance)

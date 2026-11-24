@@ -280,7 +280,7 @@ func runToken(ctx context.Context, st *store.Store, args []string) error {
 			name = args[0]
 		}
 		tok := web.NewToken()
-		if _, err := st.CreateToken(ctx, name, web.HashToken(tok)); err != nil {
+		if _, err := st.CreateTokenWithPrefix(ctx, name, web.HashToken(tok), web.TokenPrefix(tok)); err != nil {
 			return err
 		}
 		fmt.Printf("API token (%s) — store it now, it will not be shown again:\n\n  %s\n\n", name, tok)

@@ -56,23 +56,55 @@
       {{end}}
     </div>
 
-    <div class="settings-section">
-      <h2>API tokens</h2>
-      <p class="muted">Tokens for the Firefox extension and bookmarklet. Plaintext values are shown only once at mint time (<code>dnttg token mint</code>). Revoking immediately rejects the token.</p>
+    <div class="settings-section" id="auth-keys">
+      <h2>Auth keys &amp; API tokens</h2>
+      <p class="muted">Bearer tokens for the MCP server (<code>/mcp</code>), browser extension, and API. Keys are stored as SHA-256 hashes only — the full secret is revealed once when generated or rotated. Rotating immediately invalidates the old key.</p>
+
+      {{- with .Settings.MintedToken}}
+      <div class="token-reveal" role="status" aria-live="polite">
+        <div class="token-reveal-head">
+          <span class="token-reveal-badge">{{if eq .Action "rotated"}}Key rotated{{else}}New key generated{{end}}</span>
+          <strong class="token-reveal-name">{{.Name}}</strong>
+        </div>
+        <p class="muted">Copy this secret now — it will not be shown again once you leave or refresh this page.{{if eq .Action "rotated"}} The previous key has been invalidated immediately.{{end}}</p>
+        <div class="token-secret-row">
+          <code class="token-secret-val" id="minted-token-secret">{{.Secret}}</code>
+          <button type="button" class="btn-subtle" data-copy-target="#minted-token-secret">Copy key</button>
+        </div>
+        <details class="token-mcp-details">
+          <summary>MCP client JSON snippet</summary>
+          <pre class="token-mcp-pre" id="minted-token-mcp">{{.MCPJSON}}</pre>
+          <button type="button" class="btn-subtle" data-copy-target="#minted-token-mcp">Copy MCP JSON</button>
+        </details>
+      </div>
+      {{- end}}
+
+      <form method="POST" action="/admin/tokens/create" class="token-create-form">
+        {{template "csrf" .}}
+        <input type="text" name="name" placeholder="Key label (e.g. claude-mcp, firefox, cursor)" maxlength="64" required aria-label="New auth key label">
+        <button type="submit" class="btn">Generate key</button>
+      </form>
+
       {{if .Settings.Tokens}}
       <table class="admin-table tokens-table">
-        <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
         <tbody>
         {{- range .Settings.Tokens}}
           <tr>
             <td>{{.Name}}</td>
+            <td>{{if .Prefix}}<code class="token-mask">{{.Prefix}}••••••••</code>{{else}}<span class="muted">legacy</span>{{end}}</td>
             <td>{{longDate .CreatedAt}}</td>
             <td>{{if .LastUsedAt}}{{longDate .LastUsedAt}}{{else}}—{{end}}</td>
-            <td>
-              <form method="POST" action="/admin/tokens/revoke" class="inline-form" data-confirm="Revoke token {{.Name}}?">
+            <td class="token-actions">
+              <form method="POST" action="/admin/tokens/rotate" class="inline-form" data-confirm="Rotate key {{.Name}}? The current secret will stop working immediately.">
                 {{template "csrf" $}}
                 <input type="hidden" name="id" value="{{.ID}}">
-                <button type="submit" class="btn-link">Revoke</button>
+                <button type="submit" class="btn-link">Rotate</button>
+              </form>
+              <form method="POST" action="/admin/tokens/revoke" class="inline-form" data-confirm="Delete key {{.Name}}? Any client using it will immediately lose access.">
+                {{template "csrf" $}}
+                <input type="hidden" name="id" value="{{.ID}}">
+                <button type="submit" class="btn-link is-danger">Delete</button>
               </form>
             </td>
           </tr>
@@ -80,7 +112,7 @@
         </tbody>
       </table>
       {{else}}
-      <p class="muted">No tokens yet. Run <code>dnttg token mint firefox</code> on the server.</p>
+      <p class="muted">No auth keys yet. Generate one above for MCP clients or the browser extension.</p>
       {{end}}
     </div>
 

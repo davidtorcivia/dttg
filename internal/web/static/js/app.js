@@ -1847,6 +1847,34 @@
     });
   })();
 
+  // ===== copy-to-clipboard buttons (auth key reveal / MCP snippet) =====
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest && e.target.closest('[data-copy-target]');
+    if (!btn) return;
+    var sel = btn.getAttribute('data-copy-target');
+    var target = sel ? document.querySelector(sel) : null;
+    if (!target) return;
+    var text = target.textContent || '';
+    if (!text) return;
+    var orig = btn.textContent;
+    var markCopied = function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = orig; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(markCopied).catch(function () {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); markCopied(); } catch (err) {}
+      ta.remove();
+    }
+  });
+
   // ===== easter eggs =====
 
   try {

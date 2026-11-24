@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -63,7 +65,15 @@ type settingsView struct {
 	Description    string
 	Backup         backupView
 	Tokens         []store.APIToken
+	MintedToken    *mintedTokenView
 	ActiveSessions int
+}
+
+type mintedTokenView struct {
+	Name    string
+	Secret  string
+	Action  string // "generated" or "rotated"
+	MCPJSON string
 }
 
 type backupView struct {
@@ -560,10 +570,91 @@ func (s *Server) handleAdminSettingsSave(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
 }
 
+func (s *Server) currentSettingsView(r *http.Request) *settingsView {
+	tracking, _ := s.store.GetSetting(r.Context(), "tracking_script")
+	id := s.siteID()
+	return &settingsView{
+		Tracking:    tracking,
+		Columns:     s.siteData(r.Context()).boardColumns,
+		Title:       id.Title,
+		Tagline:     id.Tagline,
+		BaseURL:     id.BaseURL,
+		Description: id.Description,
+	}
+}
+
+func (s *Server) mcpSnippetForToken(tok string) string {
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"donottouchtheglass": map[string]any{
+				"url": s.absURL("/mcp"),
+				"headers": map[string]string{
+					"Authorization": "Bearer " + tok,
+				},
+			},
+		},
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return string(b)
+}
+
+func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		s.renderSettings(w, r, http.StatusBadRequest, s.currentSettingsView(r), "Enter a name for the new auth key")
+		return
+	}
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	tok := NewToken()
+	if _, err := s.store.CreateTokenWithPrefix(r.Context(), name, HashToken(tok), TokenPrefix(tok)); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	sv := s.currentSettingsView(r)
+	sv.MintedToken = &mintedTokenView{
+		Name:    name,
+		Secret:  tok,
+		Action:  "generated",
+		MCPJSON: s.mcpSnippetForToken(tok),
+	}
+	s.renderSettings(w, r, http.StatusOK, sv, "")
+}
+
+func (s *Server) handleAdminTokenRotate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("id")), 10, 64)
+	if err != nil || id <= 0 {
+		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+		return
+	}
+	tok := NewToken()
+	updated, err := s.store.RotateToken(r.Context(), id, HashToken(tok), TokenPrefix(tok))
+	if errors.Is(err, sql.ErrNoRows) {
+		s.renderSettings(w, r, http.StatusNotFound, s.currentSettingsView(r), "Auth key not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	sv := s.currentSettingsView(r)
+	sv.MintedToken = &mintedTokenView{
+		Name:    updated.Name,
+		Secret:  tok,
+		Action:  "rotated",
+		MCPJSON: s.mcpSnippetForToken(tok),
+	}
+	s.renderSettings(w, r, http.StatusOK, sv, "")
+}
+
 func (s *Server) handleAdminTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	if id := strings.TrimSpace(r.FormValue("id")); id != "" {
 		if err := s.store.RevokeToken(r.Context(), id); err != nil {
 			log.Printf("revoke token %s: %v", id, err)
+		} else {
+			http.Redirect(w, r, "/admin/settings?notice="+url.QueryEscape("Auth key deleted"), http.StatusSeeOther)
+			return
 		}
 	}
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)

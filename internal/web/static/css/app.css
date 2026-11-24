@@ -647,6 +647,28 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [role="button"]:fo
 .bookmarklet { display:inline-block; border:1px solid var(--text); padding:.5rem 1rem; text-decoration:none; font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; cursor:grab; transition:background-color .2s ease, color .2s ease; }
 .bookmarklet:hover { background:var(--text); color:var(--bg); }
 
+/* Auth keys / API tokens manager */
+.token-create-form { display:flex; align-items:flex-end; gap:.85rem; margin:1.1rem 0 1.4rem; }
+.token-create-form input[type="text"] { flex:1; min-width:0; padding:.52rem 0; border:none; border-bottom:1px solid var(--line); background:transparent; font-family:inherit; font-size:.9rem; color:var(--text); outline:none; transition:border-color var(--dur-1) ease; }
+.token-create-form input[type="text"]:focus { border-color:var(--text); }
+.token-create-form button { flex:0 0 auto; }
+.token-reveal { margin:1rem 0 1.4rem; padding:1.1rem 1.2rem; border:1px solid var(--text); background:var(--paper-tint); }
+.token-reveal-head { display:flex; align-items:center; gap:.75rem; margin-bottom:.5rem; }
+.token-reveal-badge { font-size:.6rem; text-transform:uppercase; letter-spacing:.12em; padding:.18rem .45rem; background:var(--text); color:var(--bg); font-weight:500; }
+.token-reveal-name { font-size:.86rem; font-weight:500; }
+.token-secret-row { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; margin:.75rem 0 .25rem; }
+.token-secret-val { flex:1; min-width:0; padding:.55rem .7rem !important; border:1px solid var(--line); background:var(--bg) !important; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.82rem !important; word-break:break-all; user-select:all; }
+.token-mcp-details { margin-top:.8rem; padding-top:.7rem; border-top:1px solid var(--line); }
+.token-mcp-details summary { font-size:.64rem; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); cursor:pointer; }
+.token-mcp-details summary:hover { color:var(--text); }
+.token-mcp-pre { margin:.65rem 0; padding:.7rem .8rem; border:1px solid var(--line); background:var(--bg); font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.74rem; line-height:1.5; overflow-x:auto; white-space:pre; }
+.token-mask { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.76rem; letter-spacing:.04em; color:var(--muted); background:var(--paper-tint); padding:.12rem .4rem; }
+.token-actions { display:flex; justify-content:flex-end; align-items:center; gap:1rem; white-space:nowrap; }
+.btn-link.is-danger:hover { color:var(--danger); }
+@media (max-width:600px) {
+  .token-create-form { flex-direction:column; align-items:stretch; }
+}
+
 /* ---------- dark mode ---------- */
 html, body { transition:background-color .35s ease, color .35s ease; }
 :root[data-theme="dark"] {

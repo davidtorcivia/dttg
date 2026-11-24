@@ -277,11 +277,47 @@ func (s *Store) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 // ---------- api tokens ----------
 
 func (s *Store) CreateToken(ctx context.Context, name, hash string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO api_tokens(name, token_hash) VALUES(?,?)`, name, hash)
+	return s.CreateTokenWithPrefix(ctx, name, hash, "")
+}
+
+// CreateTokenWithPrefix stores a new API token hash alongside a non-secret display prefix.
+func (s *Store) CreateTokenWithPrefix(ctx context.Context, name, hash, prefix string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO api_tokens(name, token_hash, token_prefix) VALUES(?,?,?)`,
+		strings.TrimSpace(name), hash, prefix)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// RotateToken atomically replaces a token's hash and prefix (immediately
+// invalidating the previous secret) and resets created_at / last_used_at.
+func (s *Store) RotateToken(ctx context.Context, id int64, newHash, newPrefix string) (*APIToken, error) {
+	var tok APIToken
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE api_tokens SET token_hash=?, token_prefix=?, created_at=unixepoch(), last_used_at=NULL WHERE id=?`,
+			newHash, newPrefix, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return sql.ErrNoRows
+		}
+		var created int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id, name, token_prefix, created_at FROM api_tokens WHERE id=?`, id).
+			Scan(&tok.ID, &tok.Name, &tok.Prefix, &created); err != nil {
+			return err
+		}
+		tok.CreatedAt = unixUTC(created)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &tok, nil
 }
 
 // TokenValid reports whether the hash matches a stored token and stamps last use.
@@ -298,6 +334,7 @@ func (s *Store) TokenValid(ctx context.Context, hash string) (bool, error) {
 type APIToken struct {
 	ID         int64
 	Name       string
+	Prefix     string
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
@@ -308,14 +345,14 @@ func (s *Store) ListTokens(ctx context.Context) ([]APIToken, error) {
 		var t APIToken
 		var created int64
 		var last sql.NullInt64
-		err := sc.Scan(&t.ID, &t.Name, &created, &last)
+		err := sc.Scan(&t.ID, &t.Name, &t.Prefix, &created, &last)
 		t.CreatedAt = unixUTC(created)
 		if last.Valid {
 			lu := unixUTC(last.Int64)
 			t.LastUsedAt = &lu
 		}
 		return t, err
-	}, `SELECT id, name, created_at, last_used_at FROM api_tokens ORDER BY created_at DESC, id DESC`)
+	}, `SELECT id, name, token_prefix, created_at, last_used_at FROM api_tokens ORDER BY created_at DESC, id DESC`)
 }
 
 // RevokeToken deletes a token by numeric id or exact name. Returns sql.ErrNoRows

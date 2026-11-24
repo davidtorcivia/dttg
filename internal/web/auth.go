@@ -63,6 +63,15 @@ func NewToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// TokenPrefix returns a short non-secret display prefix (first 8 chars) for
+// identifying a key in the admin table without storing the plaintext secret.
+func TokenPrefix(tok string) string {
+	if len(tok) <= 8 {
+		return tok
+	}
+	return tok[:8]
+}
+
 // HashToken stores tokens as their SHA-256 (tokens are already high-entropy).
 func HashToken(tok string) string {
 	sum := sha256.Sum256([]byte(tok))
